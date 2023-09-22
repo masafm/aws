@@ -5,15 +5,24 @@ Description: >-
 Parameters:
   ddApiKey:
     Type: String
+  nodeLayerVersion:
+    Type: Number
+    Default: 98
+  pythonLayerVersion:
+    Type: Number
+    Default: 80
+  extensionLayerVersion:
+    Type: Number
+    Default: 48
 
 Transform:
 - AWS::Serverless-2016-10-31
 - Name: DatadogServerlessMasafumiKashiwagi
   Parameters:
     stackName: !Ref "AWS::StackName"
-    nodeLayerVersion: 98
-    pythonLayerVersion: 80
-    extensionLayerVersion: 48
+    nodeLayerVersion: !Ref nodeLayerVersion
+    pythonLayerVersion: !Ref pythonLayerVersion
+    extensionLayerVersion: !Ref extensionLayerVersion
     site: "datadoghq.com"
     apiKey: !Ref ddApiKey
     enableXrayTracing: true
