@@ -39,8 +39,6 @@ Resources:
       Architectures:
       - x86_64
       Handler: src/handlers/index.handler
-      # This property associates this Lambda function with the SQS queue defined above, so that whenever the queue
-      # receives a message, the Lambda function is invoked
       Events:
         APIGatewayEvent:
           Type: Api # More info about API Event Source: https://github.com/awslabs/serverless-application-model/blob/master/versions/2016-10-31.md#api
