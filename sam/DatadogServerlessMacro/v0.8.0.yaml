@@ -9,7 +9,7 @@ Mappings:
 Parameters:
   FunctionName:
     Type: String
-    Default: DatadogServerlessMacroLambdaMasafumiKashiwagi
+    Default: DatadogServerlessMacroLambda
     Description: The name of the Lambda function that is invoked when the macro is run.
   LogRetentionInDays:
     Type: Number
