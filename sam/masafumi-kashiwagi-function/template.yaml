@@ -1,0 +1,108 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: >-
+  Masafumi Kashiwagi's functions
+
+Parameters:
+  ddApiKey:
+    Type: String
+
+Transform:
+- AWS::Serverless-2016-10-31
+- Name: DatadogServerlessMasafumiKashiwagi
+  Parameters:
+    stackName: !Ref "AWS::StackName"
+    nodeLayerVersion: 98
+    pythonLayerVersion: 80
+    extensionLayerVersion: 48
+    site: "datadoghq.com"
+    apiKey: !Ref ddApiKey
+    enableXrayTracing: true
+    env: dev
+    logLevel: DEBUG
+    captureLambdaPayload: true
+    enableProfiling: true
+
+# Resources declares the AWS resources that you want to include in the stack
+# https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/resources-section-structure.html
+Resources:
+  # This is an SQS queue with all default configuration properties. To learn more about the available options, see
+  # https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-properties-sqs-queues.html
+  SimpleQueue:
+    Type: AWS::SQS::Queue
+
+  FunctionNode:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: masafumi-kashiwagi-node
+      Description: null
+      Runtime: nodejs18.x
+      Architectures:
+      - x86_64
+      Handler: src/handlers/index.handler
+      # This property associates this Lambda function with the SQS queue defined above, so that whenever the queue
+      # receives a message, the Lambda function is invoked
+      Events:
+        APIGatewayEvent:
+          Type: Api # More info about API Event Source: https://github.com/awslabs/serverless-application-model/blob/master/versions/2016-10-31.md#api
+          Properties:
+            Path: /invoke
+            Method: get
+      Environment:
+        Variables:
+          DD_SERVICE: lambda-node
+          SQS_QUEUE_URL: !Ref SimpleQueue # Gets SQS Queue URL
+      Timeout: 25 # Chosen to be less than the default SQS Visibility Timeout of 30 seconds
+      Policies:
+        # Give Lambda basic execution Permission to the helloFromLambda
+      - AWSLambdaBasicExecutionRole
+      - SQSPollerPolicy:
+          QueueName: !GetAtt SimpleQueue.QueueName
+      - SQSSendMessagePolicy:
+          QueueName: !GetAtt SimpleQueue.QueueName
+      Layers:
+        - !Ref NodeBaseLayer
+      
+  FunctionPython:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: masafumi-kashiwagi-python
+      Description: null
+      Runtime: python3.9
+      Architectures:
+      - x86_64
+      Handler: src/handlers/lambda_function.lambda_handler
+      # This property associates this Lambda function with the SQS queue defined above, so that whenever the queue
+      # receives a message, the Lambda function is invoked
+      Events:
+        SQSQueueEvent:
+          Type: SQS
+          Properties:
+            Queue: !GetAtt SimpleQueue.Arn
+      Environment:
+        Variables:
+          DD_SERVICE: lambda-python
+      Timeout: 25 # Chosen to be less than the default SQS Visibility Timeout of 30 seconds
+      Policies:
+        # Give Lambda basic execution Permission to the helloFromLambda
+      - AWSLambdaBasicExecutionRole
+
+  NodeBaseLayer:
+    Type: AWS::Serverless::LayerVersion
+    Properties:
+      Description: Layer for Node.js
+      LayerName: masafumi-kashiwagi-node-layer
+      ContentUri: node-base-layer/
+      RetentionPolicy: Retain
+      CompatibleRuntimes:
+        - nodejs18.x
+        
+# # More info about Globals: https://github.com/awslabs/serverless-application-model/blob/master/docs/globals.rst
+Globals:
+  Function:
+    Tracing: Active
+    MemorySize: 256
+    Environment:
+      Variables:
+        DD_SERVICE_MAPPING: lambda_api_gateway:aws-api-gw,lambda_sqs:aws-sqs
+  Api:
+    TracingEnabled: true

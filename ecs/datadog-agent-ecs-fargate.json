@@ -1,0 +1,134 @@
+{
+  "family": "masafumi-kashiwagi-ecs-fargate",
+  "networkMode": "awsvpc",
+  "executionRoleArn": "arn:aws:iam::{AWS_ACCOUNT_ID}:role/ecsTaskExecutionRole",
+  "taskRoleArn": "arn:aws:iam::{AWS_ACCOUNT_ID}:role/ecsTaskExecutionRole",
+  "containerDefinitions": [
+      {
+          "name": "datadog-agent",
+          "image": "public.ecr.aws/datadog/agent:latest",
+          "essential": true,
+          "environment": [
+              {
+                  "name": "DD_API_KEY",
+                  "value": "{DD_API_KEY}"
+              },
+              {
+                  "name": "DD_APM_ENABLED",
+                  "value": "true"
+              },
+              {
+                  "name": "ECS_FARGATE",
+                  "value": "true"
+              }
+          ],
+	  "healthCheck": {
+	      "retries": 3,
+	      "command": ["CMD-SHELL","agent health"],
+	      "timeout": 5,
+	      "interval": 30,
+	      "startPeriod": 15
+	  },
+	  "logConfiguration": {
+                "logDriver": "awslogs",
+                "options": {
+                    "awslogs-group": "masafumi-kashiwagi-agent",
+                    "awslogs-region": "ap-northeast-1",
+                    "awslogs-create-group": "true",
+                    "awslogs-stream-prefix": "mk"
+                }
+            }
+      },
+      {
+          "name": "php-fpm",
+          "image": "public.ecr.aws/b1o7r7e0/masafumi.kashiwagi/php-fpm:with-ddtracer-6",
+          "essential": true,
+          "environment": [
+              {
+                  "name": "DD_ENV",
+                  "value": "ecs"
+              }
+          ],
+	  "logConfiguration": {
+                "logDriver": "awslogs",
+                "options": {
+                    "awslogs-group": "masafumi-kashiwagi-php-fpm",
+                    "awslogs-region": "ap-northeast-1",
+                    "awslogs-create-group": "true",
+                    "awslogs-stream-prefix": "mk"
+                }
+            }
+      },
+      {
+          "name": "nginx",
+          "image": "public.ecr.aws/b1o7r7e0/masafumi.kashiwagi/nginx:3",
+          "essential": true,
+          "environment": [
+              {
+                  "name": "DD_ENV",
+                  "value": "ecs"
+              }
+          ],
+	  "healthCheck": {
+	      "retries": 3,
+	      "command": ["CMD-SHELL", "curl -f http://localhost/ || exit 1"],
+	      "timeout": 5,
+	      "interval": 30,
+	      "startPeriod": 15
+	  },
+	  "logConfiguration": {
+                "logDriver": "awslogs",
+                "options": {
+                    "awslogs-group": "masafumi-kashiwagi-nginx",
+                    "awslogs-region": "ap-northeast-1",
+                    "awslogs-create-group": "true",
+                    "awslogs-stream-prefix": "mk"
+                }
+            }
+      },
+      {
+          "name": "apache-bench",
+          "image": "public.ecr.aws/b1o7r7e0/masafumi.kashiwagi/apache-bench:1",
+          "essential": true,
+          "environment": [
+          ],
+	  "logConfiguration": {
+	      "logDriver": "awsfirelens",
+	      "options": {
+		  "Name": "datadog",
+		  "apikey": "{DD_API_KEY}",
+		  "Host": "http-intake.logs.datadoghq.com",
+		  "dd_service": "apache-bench",
+		  "dd_source": "apache-bench",
+		  "dd_message_key": "log",
+		  "dd_tags": "ecs:fargate",
+		  "TLS": "on",
+		  "provider": "ecs"
+	      }
+	  }
+      },
+      {
+	  "name": "log_router",
+	  "image": "amazon/aws-for-fluent-bit:stable",
+	  "essential": true,
+	  "logConfiguration": {
+                "logDriver": "awslogs",
+                "options": {
+                    "awslogs-group": "masafumi-kashiwagi-log_router",
+                    "awslogs-region": "ap-northeast-1",
+                    "awslogs-create-group": "true",
+                    "awslogs-stream-prefix": "mk"
+                }
+          },
+	  "firelensConfiguration": {
+	      "type": "fluentbit",
+	      "options": { "enable-ecs-log-metadata": "true" }
+	  }
+      }
+  ],
+  "requiresCompatibilities": [
+      "FARGATE"
+  ],
+  "cpu": "4096",
+  "memory": "8192"
+}
