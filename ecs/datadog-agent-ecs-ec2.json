@@ -1,6 +1,8 @@
 {
   "family": "masafumi-kashiwagi-ecs-ec2",
   "networkMode": "awsvpc",
+  "executionRoleArn": "arn:aws:iam::{AWS_ACCOUNT_ID}:role/ecsTaskExecutionRole",
+  "taskRoleArn": "arn:aws:iam::{AWS_ACCOUNT_ID}:role/ecsTaskExecutionRole",
   "containerDefinitions": [
     {
       "name": "datadog-agent",
@@ -23,6 +25,10 @@
           "containerPath": "/host/proc",
           "sourceVolume": "proc",
           "readOnly": true
+        },
+        {
+          "sourceVolume": "runtimesocketdir",
+          "containerPath": "/host/var/run/datadog"
         }
       ],
       "environment": [
@@ -37,6 +43,10 @@
         {
           "name": "DD_APM_ENABLED",
           "value": "true"
+        },
+        {
+          "name": "DD_APM_RECEIVER_SOCKET",
+          "value": "/host/var/run/datadog/apm.socket"
         }
       ],
       "healthCheck": {
@@ -59,85 +69,99 @@
     {
         "name": "php-fpm",
         "image": "public.ecr.aws/b1o7r7e0/masafumi.kashiwagi/php-fpm:with-ddtracer-4",
-	"cpu": 100,
-	"memory": 512,
+        "cpu": 100,
+        "memory": 512,
         "essential": true,
         "environment": [
             {
                 "name": "DD_ENV",
                 "value": "ecs"
+            },
+            {
+              "name": "DD_TRACE_AGENT_URL",
+              "value": "unix:///host/var/run/datadog/apm.socket"
+            },
+            {
+              "name": "DD_TRACE_DEBUG",
+              "value": "true"
             }
         ],
-	"logConfiguration": {
-            "logDriver": "awslogs",
-            "options": {
-                "awslogs-group": "masafumi-kashiwagi-php-fpm",
-                "awslogs-region": "ap-northeast-1",
-                "awslogs-create-group": "true",
-                "awslogs-stream-prefix": "mk"
-            }
-        }
-    },
+        "mountPoints": [
+          {
+              "sourceVolume": "runtimesocketdir",
+              "containerPath": "/host/var/run/datadog"
+          }
+        ],
+        "logConfiguration": {
+                  "logDriver": "awslogs",
+                  "options": {
+                      "awslogs-group": "masafumi-kashiwagi-php-fpm",
+                      "awslogs-region": "ap-northeast-1",
+                      "awslogs-create-group": "true",
+                      "awslogs-stream-prefix": "mk"
+                  }
+              }
+          },
     {
         "name": "nginx",
         "image": "public.ecr.aws/b1o7r7e0/masafumi.kashiwagi/nginx:1",
-	"cpu": 100,
-	"memory": 512,
+        "cpu": 100,
+        "memory": 512,
         "essential": true,
         "environment": [
         ],
-	"logConfiguration": {
-            "logDriver": "awslogs",
-            "options": {
-                "awslogs-group": "masafumi-kashiwagi-nginx",
-                "awslogs-region": "ap-northeast-1",
-                "awslogs-create-group": "true",
-                "awslogs-stream-prefix": "mk"
-            }
+	      "logConfiguration": {
+          "logDriver": "awslogs",
+          "options": {
+              "awslogs-group": "masafumi-kashiwagi-nginx",
+              "awslogs-region": "ap-northeast-1",
+              "awslogs-create-group": "true",
+              "awslogs-stream-prefix": "mk"
+          }
         }
     },
     {
-        "name": "apache-bench",
-        "image": "public.ecr.aws/b1o7r7e0/masafumi.kashiwagi/apache-bench:1",
-	"cpu": 100,
-	"memory": 512,
-        "essential": true,
-        "environment": [
-        ],
-	"logConfiguration": {
-	    "logDriver": "awsfirelens",
-	    "options": {
-		"Name": "datadog",
-		"apikey": "{DD_API_KEY}",
-		"Host": "http-intake.logs.datadoghq.com",
-		"dd_service": "apache-bench",
-		"dd_source": "apache-bench",
-		"dd_message_key": "log",
-		"dd_tags": "ecs:ec2",
-		"TLS": "on",
-		"provider": "ecs"
-	    }
-	}
+      "name": "apache-bench",
+      "image": "public.ecr.aws/b1o7r7e0/masafumi.kashiwagi/apache-bench:1",
+      "cpu": 100,
+      "memory": 512,
+      "essential": true,
+      "environment": [
+      ],
+      "logConfiguration": {
+          "logDriver": "awsfirelens",
+          "options": {
+        "Name": "datadog",
+        "apikey": "{DD_API_KEY}",
+        "Host": "http-intake.logs.datadoghq.com",
+        "dd_service": "apache-bench",
+        "dd_source": "apache-bench",
+        "dd_message_key": "log",
+        "dd_tags": "ecs:ec2",
+        "TLS": "on",
+        "provider": "ecs"
+          }
+      }
     },
     {
-	"name": "log_router",
-	"image": "amazon/aws-for-fluent-bit:stable",
-	"cpu": 100,
-	"memory": 512,
-	"essential": true,
-	"firelensConfiguration": {
-	    "type": "fluentbit",
-	    "options": { "enable-ecs-log-metadata": "true" }
-	},
-	"logConfiguration": {
-            "logDriver": "awslogs",
-            "options": {
-                "awslogs-group": "masafumi-kashiwagi-log_router",
-                "awslogs-region": "ap-northeast-1",
-                "awslogs-create-group": "true",
-                "awslogs-stream-prefix": "mk"
-            }
+      "name": "log_router",
+      "image": "amazon/aws-for-fluent-bit:stable",
+      "cpu": 100,
+      "memory": 512,
+      "essential": true,
+      "firelensConfiguration": {
+          "type": "fluentbit",
+          "options": { "enable-ecs-log-metadata": "true" }
+      },
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+            "awslogs-group": "masafumi-kashiwagi-log_router",
+            "awslogs-region": "ap-northeast-1",
+            "awslogs-create-group": "true",
+            "awslogs-stream-prefix": "mk"
         }
+      }
     }
   ],
   "volumes": [
@@ -158,6 +182,12 @@
         "sourcePath": "/sys/fs/cgroup/"
       },
       "name": "cgroup"
+    },
+    {
+      "name": "runtimesocketdir",
+      "host": {
+          "sourcePath": "/var/run/datadog"
     }
+  }
   ]
 }
