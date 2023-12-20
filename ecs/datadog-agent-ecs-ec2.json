@@ -29,6 +29,10 @@
         {
           "sourceVolume": "runtimesocketdir",
           "containerPath": "/host/var/run/datadog"
+        },
+        {
+          "sourceVolume": "ntpd",
+          "containerPath": "/etc/datadog-agent/conf.d/ntp.d"
         }
       ],
       "environment": [
@@ -87,10 +91,10 @@
             }
         ],
         "mountPoints": [
-          {
-              "sourceVolume": "runtimesocketdir",
-              "containerPath": "/host/var/run/datadog"
-          }
+            {
+                "sourceVolume": "runtimesocketdir",
+                "containerPath": "/host/var/run/datadog"
+            }
         ],
         "logConfiguration": {
                   "logDriver": "awslogs",
@@ -188,6 +192,12 @@
       "host": {
           "sourcePath": "/var/run/datadog"
     }
-  }
+    },
+    {
+      "name": "ntpd",
+      "host": {
+          "sourcePath": "/etc/datadog-agent/conf.d/ntp.d"
+    }
+    }
   ]
 }
