@@ -1,5 +1,6 @@
 {
   "family": "masafumi-kashiwagi-ecs-ec2-win",
+  "networkMode": "awsvpc",
   "containerDefinitions": [
     {
       "name": "datadog-agent",
@@ -11,10 +12,6 @@
         {
           "containerPath": "\\\\.\\pipe\\docker_engine",
           "sourceVolume": "docker_sock"
-        },
-	{
-          "sourceVolume": "ntpd",
-          "containerPath": "C:\\ProgramData\\Datadog\\conf.d\\ntp.d"
         }
       ],
       "environment": [
@@ -51,9 +48,6 @@
         "sourcePath": "\\\\.\\pipe\\docker_engine"
       },
       "name": "docker_sock"
-    },
-    {
-      "name": "ntpd"
     }
   ]
 }
