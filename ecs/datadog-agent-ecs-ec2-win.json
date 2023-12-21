@@ -53,10 +53,7 @@
       "name": "docker_sock"
     },
     {
-      "name": "ntpd",
-      "host": {
-          "sourcePath": "C:\\ProgramData\\Datadog\\conf.d\\ntp.d"
-    }
+      "name": "ntpd"
     }
   ]
 }
