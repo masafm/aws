@@ -1,7 +1,5 @@
 {
   "family": "masafumi-kashiwagi-ecs-ec2-win",
-  "executionRoleArn": "arn:aws:iam::{AWS_ACCOUNT_ID}:role/ecsTaskExecutionRole",
-  "taskRoleArn": "arn:aws:iam::{AWS_ACCOUNT_ID}:role/ecsTaskExecutionRole",
   "containerDefinitions": [
     {
       "name": "datadog-agent",
@@ -12,8 +10,11 @@
       "mountPoints": [
         {
           "containerPath": "\\\\.\\pipe\\docker_engine",
-          "sourceVolume": "docker_sock",
-          "readOnly": true
+          "sourceVolume": "docker_sock"
+        },
+	{
+          "sourceVolume": "ntpd",
+          "containerPath": "C:\\ProgramData\\Datadog\\conf.d\\ntp.d"
         }
       ],
       "environment": [
@@ -25,7 +26,23 @@
           "name": "DD_SITE",
           "value": "datadoghq.com"
         }
-      ]
+      ],
+      "healthCheck": {
+	  "retries": 3,
+	  "command": ["CMD-SHELL","agent health"],
+	  "timeout": 5,
+	  "interval": 30,
+	  "startPeriod": 15
+      },
+      "logConfiguration": {
+          "logDriver": "awslogs",
+          "options": {
+              "awslogs-group": "masafumi-kashiwagi-win-agent",
+              "awslogs-region": "ap-northeast-1",
+              "awslogs-create-group": "true",
+              "awslogs-stream-prefix": "mk"
+          }
+      }
     }
   ],
   "volumes": [
@@ -34,6 +51,12 @@
         "sourcePath": "\\\\.\\pipe\\docker_engine"
       },
       "name": "docker_sock"
+    },
+    {
+      "name": "ntpd",
+      "host": {
+          "sourcePath": "C:\\ProgramData\\Datadog\\conf.d\\ntp.d"
+    }
     }
   ]
 }
