@@ -147,51 +147,6 @@
         }
     },
     {
-      "name": "jmx-test",
-      "image": "public.ecr.aws/b1o7r7e0/masafumi.kashiwagi/jmx-test:20231219-1",
-      "cpu": 100,
-      "memory": 1024,
-      "essential": true,
-      "environment": [
-            {
-                "name": "DD_ENV",
-                "value": "ecs"
-            },
-            {
-              "name": "DD_TRACE_AGENT_URL",
-              "value": "unix:///host/var/run/datadog/apm.socket"
-            },
-            {
-              "name": "DD_TRACE_DEBUG",
-              "value": "true"
-            },
-            {
-              "name": "TARGET_URL",
-	      "value": "http://localhost/"
-            }
-      ],
-      "mountPoints": [
-          {
-              "sourceVolume": "runtimesocketdir",
-              "containerPath": "/host/var/run/datadog"
-          }
-      ],
-      "logConfiguration": {
-          "logDriver": "awsfirelens",
-          "options": {
-            "Name": "datadog",
-            "apikey": "{DD_API_KEY}",
-            "Host": "http-intake.logs.datadoghq.com",
-            "dd_service": "jmx-test",
-            "dd_source": "java",
-            "dd_message_key": "log",
-            "dd_tags": "ecs:ec2",
-            "TLS": "on",
-            "provider": "ecs"
-          }
-      }
-    },
-    {
       "name": "apache-bench",
       "image": "public.ecr.aws/b1o7r7e0/masafumi.kashiwagi/apache-bench:1",
       "cpu": 100,
