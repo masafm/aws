@@ -17,7 +17,7 @@ Parameters:
 
 Transform:
 - AWS::Serverless-2016-10-31
-- Name: DatadogServerlessMasafumiKashiwagi
+- Name: DatadogServerlessMasafumiKashiwagi2
   Parameters:
     stackName: !Ref "AWS::StackName"
     nodeLayerVersion: !Ref nodeLayerVersion
