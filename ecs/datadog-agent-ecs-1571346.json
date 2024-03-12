@@ -1,0 +1,88 @@
+{
+  "family": "masafumi-kashiwagi-ecs-1571346",
+  "networkMode": "awsvpc",
+  "executionRoleArn": "arn:aws:iam::{AWS_ACCOUNT_ID}:role/ecsTaskExecutionRole",
+  "taskRoleArn": "arn:aws:iam::{AWS_ACCOUNT_ID}:role/ecsTaskExecutionRole",
+    "containerDefinitions": [
+        {
+        "name": "worker",
+        "image": "ubuntu",
+        "essential": true,
+        "command": [
+            "/bin/sh",
+            "-c",
+            "while true;do date; sleep 1;done"
+        ],
+        "logConfiguration": {
+            "logDriver": "awslogs",
+            "options": {
+                "awslogs-group": "masafumi-kashiwagi-worker-1571346",
+                "awslogs-region": "ap-northeast-1",
+                "awslogs-create-group": "true",
+                "awslogs-stream-prefix": "mk"
+            }
+        }
+    },
+      {
+      "name": "datadog-agent",
+      "image": "public.ecr.aws/datadog/agent:7.51.0",
+      "cpu": 10,
+      "memoryReservation": 256,
+      "portMappings": [
+          {
+          "containerPort": 8126,
+          "hostPort": 8126,
+          "protocol": "tcp"
+      }
+      ],
+      "essential": true,
+      "environment": [
+          {
+          "name": "DD_API_KEY",
+          "value": "{DD_API_KEY}"
+      },
+          {
+          "name": "ECS_FARGATE",
+          "value": "true"
+      },
+          {
+          "name": "DD_APM_ENABLED",
+          "value": "true"
+      },
+          {
+          "name": "DD_APM_NON_LOCAL_TRAFFIC",
+          "value": "true"
+      },
+          {
+          "name": "DD_DOGSTATSD_NON_LOCAL_TRAFFIC",
+          "value": "true"
+      },
+          {
+          "name": "DD_PROCESS_AGENT_ENABLED",
+          "value": "true"
+      }
+      ],
+      "healthCheck": {
+	  "retries": 3,
+	  "command": ["CMD-SHELL","agent health"],
+	  "timeout": 5,
+	  "interval": 30,
+	  "startPeriod": 15
+      },
+      "logConfiguration": {
+          "logDriver": "awslogs",
+          "options": {
+              "awslogs-group": "masafumi-kashiwagi-agent-1571346",
+              "awslogs-region": "ap-northeast-1",
+              "awslogs-create-group": "true",
+              "awslogs-stream-prefix": "mk"
+          }
+      }
+  }
+  ],
+    "requiresCompatibilities": [
+        "FARGATE"
+    ],
+    "cpu": "4096",
+    "memory": "8192"
+}
