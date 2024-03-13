@@ -1,12 +1,12 @@
 {
-  "family": "masafumi-kashiwagi-ecs-fargate-1577669",
+  "family": "masafumi-kashiwagi-ecs-fargate",
   "networkMode": "awsvpc",
   "executionRoleArn": "arn:aws:iam::{AWS_ACCOUNT_ID}:role/ecsTaskExecutionRole",
   "taskRoleArn": "arn:aws:iam::{AWS_ACCOUNT_ID}:role/ecsTaskExecutionRole",
   "containerDefinitions": [
       {
           "name": "datadog-agent",
-          "image": "public.ecr.aws/b1o7r7e0/masafumi.kashiwagi/datadog-agent:7.50.3-jmx-20240312",
+          "image": "public.ecr.aws/datadog/agent:7",
           "essential": true,
           "environment": [
               {
@@ -19,10 +19,6 @@
               },
               {
                   "name": "ECS_FARGATE",
-                  "value": "true"
-              },
-              {
-                  "name": "DD_LOGS_ENABLED",
                   "value": "true"
               }
           ],
