@@ -1,9 +1,35 @@
 {
-  "family": "masafumi-kashiwagi-ecs-fargate",
+  "family": "masafumi-kashiwagi-ecs-fargate-efs-test",
   "networkMode": "awsvpc",
   "executionRoleArn": "arn:aws:iam::{AWS_ACCOUNT_ID}:role/ecsTaskExecutionRole",
   "taskRoleArn": "arn:aws:iam::{AWS_ACCOUNT_ID}:role/ecsTaskExecutionRole",
-  "containerDefinitions": [
+    "containerDefinitions": [
+        {
+        "name": "ubuntu",
+        "image": "ubuntu",
+        "essential": true,
+        "entryPoint": [
+            "sh",  "-c"
+        ],
+        "command": [
+            "df -h && while true; do echo \"RUNNING\"; done"
+        ],
+        "mountPoints": [
+            {
+            "sourceVolume": "efs-test",
+            "containerPath": "/efs"
+        }
+        ],
+	"logConfiguration": {
+            "logDriver": "awslogs",
+            "options": {
+                "awslogs-group": "masafumi-kashiwagi-ubuntu",
+                "awslogs-region": "ap-northeast-1",
+                "awslogs-create-group": "true",
+                "awslogs-stream-prefix": "mk"
+            }
+        }
+      },
       {
           "name": "datadog-agent",
           "image": "public.ecr.aws/datadog/agent:7",
@@ -20,7 +46,17 @@
               {
                   "name": "ECS_FARGATE",
                   "value": "true"
+              },
+              {
+                  "name": "DD_LOGS_ENABLED",
+                  "value": "true"
               }
+          ],
+          "mountPoints": [
+              {
+              "sourceVolume": "efs-test",
+              "containerPath": "/etc/datadog-agent/conf.d/logs.d/"
+          }
           ],
 	  "healthCheck": {
 	      "retries": 3,
@@ -126,6 +162,14 @@
 	  }
       }
   ],
+    "volumes": [
+        {
+            "name": "efs-test",
+            "efsVolumeConfiguration": {
+                "fileSystemId": "fs-0832bd878e8a50f75"
+            }
+        }
+    ],
   "requiresCompatibilities": [
       "FARGATE"
   ],
