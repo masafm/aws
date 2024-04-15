@@ -7,17 +7,17 @@ Parameters:
     Type: String
   nodeLayerVersion:
     Type: Number
-    Default: 98
+    Default: 108
   pythonLayerVersion:
     Type: Number
-    Default: 80
+    Default: 92
   extensionLayerVersion:
     Type: Number
     Default: 48
 
 Transform:
 - AWS::Serverless-2016-10-31
-- Name: DatadogServerlessMasafumiKashiwagi2
+- Name: DatadogServerlessMasafumiKashiwagi
   Parameters:
     stackName: !Ref "AWS::StackName"
     nodeLayerVersion: !Ref nodeLayerVersion
@@ -26,7 +26,7 @@ Transform:
     site: "datadoghq.com"
     apiKey: !Ref ddApiKey
     enableXrayTracing: true
-    env: dev
+    env: lambda
     logLevel: DEBUG
     captureLambdaPayload: true
     enableProfiling: true

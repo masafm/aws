@@ -221,5 +221,5 @@ Resources:
   Macro:
     Type: AWS::CloudFormation::Macro
     Properties:
-      Name: DatadogServerlessMasafumiKashiwagi2
+      Name: DatadogServerlessMasafumiKashiwagi
       FunctionName: !GetAtt MacroFunction.Arn
