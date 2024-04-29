@@ -56,6 +56,11 @@ aws --region ${region} ec2 create-tags --resources $instance_id --tags Key=Name,
 # Output the instance name
 echo "---------------------------------"
 echo "Instance name: ${instance_name}"
+echo "Instance ID: ${instance_id}"
+echo "VPC ID: ${vpc_id}"
+echo "Subnet ID: ${subnet_id}"
+echo "Security Group ID: ${sg_id}"
+echo "AMI ID: ${ami_id}"
 echo "Public IP: $(aws --region $region ec2 describe-instances --instance-ids "${instance_id}" --query 'Reservations[*].Instances[*].PublicIpAddress' --output text 2>/dev/null)"
 echo "Private IP: $(aws --region $region ec2 describe-instances --instance-ids "${instance_id}" --query 'Reservations[*].Instances[*].PrivateIpAddress' --output text 2>/dev/null)"
 echo "User Name: ubuntu"
