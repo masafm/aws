@@ -22,8 +22,25 @@ timestamp=$(date +%s)
 # Retrieve my public IP address
 my_ip=$(curl -s https://checkip.amazonaws.com)
 
+
+# Specify the AMI ID and instance type
+ami_id=${AMI_ID:-"ami-0adb3635eb20f395b"}
+ami_info=$(aws --region ${region} ec2 describe-images --image-ids "$ami_id" --query 'Images[*].{Platform:Platform,Name:Name}' --output json)
+
+# Determine the OS using the Platform attribute
+if echo "$ami_info" | grep -q '"Platform": "windows"'; then
+  ami_platform="windows"
+  echo "The AMI ID $ami_id is a Windows image."
+elif echo "$ami_info" | grep -iq 'linux'; then
+  ami_platform="linux"
+  echo "The AMI ID $ami_id is a Linux image."
+else
+  ami_platform="other"
+  echo "The OS of AMI ID $ami_id could not be determined or it is not a standard Linux or Windows image."
+fi
+
 # Set the instance name based on the username
-instance_name="${user_name}-kvm-${timestamp}"
+instance_name="${user_name}-${ami_platform}-${timestamp}"
 
 # Create a security group
 subnet_id=${SUBNET_ID:-"subnet-099904a6ad96204d6"}
@@ -43,24 +60,77 @@ else
     sg_id=$(aws --region ${region} ec2 describe-security-groups --filters Name=vpc-id,Values=${vpc_id} Name=group-name,Values='default' --query 'SecurityGroups[0].GroupId' --output text)
 fi
 
-hostname=$(echo $instance_name | sed -e 's/\./-/g')
-user_data=$(cat <<EOF
+hostname="$(echo $instance_name | sed -e 's/\./-/g')"
+
+if [[ $ami_platform != windows ]]; then
+    user_data=$(cat <<EOF
 #!/bin/bash
 echo "ubuntu:Datadog/4u" | sudo chpasswd
 sudo sh -c "echo \"$hostname\" >/etc/hostname"
 sudo sh -c "hostname \"$hostname\""
+
 EOF
 )
+elif [[ $ami_platform == windows ]]; then
+    user_data=$(cat <<EOF
+<powershell>
 
-if [[ -n $DD_API_KEY ]]; then
-  user_data="${user_data}; DD_API_KEY=${DD_API_KEY} DD_SITE=\"${DD_SITE:-datadoghq.com}\" bash -c \"\$(curl -L https://s3.amazonaws.com/dd-agent/scripts/install_script_agent7.sh)\""
+EOF
+)
 fi
 
-# Specify the AMI ID and instance type
-ami_id=${AMI_ID:-"ami-0adb3635eb20f395b"}
+if [[ -n $DD_API_KEY ]] && [[ $ami_platform == linux ]]; then
+    echo "Datadog Agent for linux will be installed"
+    user_data+=$(cat <<EOF
 
+# Install Datadog Agent
+DD_API_KEY=${DD_API_KEY} DD_SITE=\"${DD_SITE:-datadoghq.com}\" bash -c \"\$(curl -L https://s3.amazonaws.com/dd-agent/scripts/install_script_agent7.sh)\""
+EOF
+)
+elif [[ $ami_platform == windows ]]; then
+    if [[ -n $DD_API_KEY ]]; then
+        echo "Datadog Agent for windows will be installed"
+        user_data+=$(cat <<EOF
+
+# Add Datadog Agent/bin to PATH
+\$newPath = "C:\Program Files\Datadog\Datadog Agent\bin"
+\$currentPath = [System.Environment]::GetEnvironmentVariable("PATH", "Machine")
+\$newPath = \$currentPath + ";" + \$newPath
+[System.Environment]::SetEnvironmentVariable("PATH", \$newPath, "Machine")
+# Install Datadog Agent
+Param(\$version)
+
+\$file = "datadog-agent-7-latest.amd64.msi"
+if (Test-Path \$file) {
+    Remove-Item -Path \$file
+}
+
+if (\$version) {
+    \$file = "ddagent-cli-\$version.msi"
+}
+
+if (-not (Test-Path \$file)) {
+    Write-Host "Downloading \$file"
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+    Invoke-WebRequest -Uri https://s3.amazonaws.com/ddagent-windows-stable/\$file -OutFile \$file
+    Write-Host "Download finished"
+}
+\$now = (Get-Date).ToString("yyyyMMddHHmmss")
+Start-Process -Wait msiexec -ArgumentList "/qn /log C:/\$file.\$now.log /i \$file DDAGENTUSER_NAME=.\\ddagentuser DDAGENTUSER_PASSWORD=ji7689sGHKJUH@ APIKEY=${DD_API_KEY}"
+</powershell>
+EOF
+)
+    else
+        user_data+=$(cat <<EOF
+</powershell>
+EOF
+)
+    fi
+fi
+
+instance_type=${INSTANCE_TYPE:-"c5.xlarge"}
 # Deploy instance from AMI
-instance_id=$(aws --region ${region} ec2 run-instances --image-id $ami_id --instance-type c5.metal --security-group-ids $sg_id --subnet-id $subnet_id --key-name "$ssh_key" --count 1 --query 'Instances[0].InstanceId' --output text --user-data "$user_data")
+instance_id=$(aws --region ${region} ec2 run-instances --image-id $ami_id --instance-type ${instance_type} --security-group-ids $sg_id --subnet-id $subnet_id --key-name "$ssh_key" --count 1 --query 'Instances[0].InstanceId' --output text --user-data "$user_data")
 
 # Set Name tag of instance
 aws --region ${region} ec2 create-tags --resources $instance_id --tags Key=Name,Value=$instance_name
@@ -73,10 +143,16 @@ echo "VPC ID: ${vpc_id}"
 echo "Subnet ID: ${subnet_id}"
 echo "Security Group ID: ${sg_id}"
 echo "AMI ID: ${ami_id}"
+echo "AMI Platform: $ami_platform"
 echo "Public IP: $(aws --region $region ec2 describe-instances --instance-ids "${instance_id}" --query 'Reservations[*].Instances[*].PublicIpAddress' --output text 2>/dev/null)"
 echo "Private IP: $(aws --region $region ec2 describe-instances --instance-ids "${instance_id}" --query 'Reservations[*].Instances[*].PrivateIpAddress' --output text 2>/dev/null)"
-echo "User Name: ubuntu"
-echo "RDP Password: Datadog/4u"
+if [[ $ami_platform != windows ]]; then
+    echo "User Name: ubuntu or ec2-user"
+    echo "RDP Password: Datadog/4u"
+elif [[ $ami_platform == windows ]]; then
+    echo "User Name: Administrator"
+    echo "RDP Password: Check AWS console"
+fi
 sleep 1
 aws_url="https://${region}.console.aws.amazon.com/ec2/home?region=${region}#InstanceDetails:instanceId=${instance_id}"
 echo $aws_url
