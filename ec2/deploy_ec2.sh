@@ -1,13 +1,17 @@
 #!/bin/bash
 set -e
 
+# Retrieve the region
 region=${REGION:-"ap-northeast-1"}
+# Retrieve the username
+user_name=$(aws --region ${region} sts get-caller-identity --query 'Arn' --output text | rev | cut -d/ -f1 | rev | sed -e 's/@.*//')
+        
 if [[ -n $SSH_KEY ]];then
     ssh_key=$SSH_KEY
 else
     aws --region $region ec2 describe-key-pairs --query 'KeyPairs[*].KeyName' --output text | tr '\t' '\n' | sort -f
     echo ""
-    default_name=masafumi.kashiwagi
+    default_name=$user_name
     echo "Please find your SSH key pair name from above list"
     echo -n "Enter your ssh key name [$default_name]: "
     read ssh_key
@@ -18,9 +22,6 @@ timestamp=$(date +%s)
 # Retrieve my public IP address
 my_ip=$(curl -s https://checkip.amazonaws.com)
 
-# Retrieve the username
-user_name=$(aws --region ${region} sts get-caller-identity --query 'Arn' --output text | rev | cut -d/ -f1 | rev | sed -e 's/@.*//')
-        
 # Set the instance name based on the username
 instance_name="${user_name}-kvm-${timestamp}"
 
