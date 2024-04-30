@@ -42,13 +42,24 @@ else
     sg_id=$(aws --region ${region} ec2 describe-security-groups --filters Name=vpc-id,Values=${vpc_id} Name=group-name,Values='default' --query 'SecurityGroups[0].GroupId' --output text)
 fi
 
+hostname=$(echo $instance_name | sed -e 's/\./-/g')
+user_data=$(cat <<EOF
+#!/bin/bash
+echo "ubuntu:Datadog/4u" | sudo chpasswd
+sudo sh -c "echo \"$hostname\" >/etc/hostname"
+sudo sh -c "hostname \"$hostname\""
+EOF
+)
+
+if [[ -n $DD_API_KEY ]]; then
+  user_data="${user_data}; DD_API_KEY=${DD_API_KEY} DD_SITE=\"${DD_SITE:-datadoghq.com}\" bash -c \"\$(curl -L https://s3.amazonaws.com/dd-agent/scripts/install_script_agent7.sh)\""
+fi
+
 # Specify the AMI ID and instance type
 ami_id=${AMI_ID:-"ami-0adb3635eb20f395b"}
 
 # Deploy instance from AMI
-instance_id=$(aws --region ${region} ec2 run-instances --image-id $ami_id --instance-type c5.metal --security-group-ids $sg_id --subnet-id $subnet_id --key-name "$ssh_key" --count 1 --query 'Instances[0].InstanceId' --output text --user-data '#!/bin/bash
-echo "ubuntu:Datadog/4u" | sudo chpasswd
-')
+instance_id=$(aws --region ${region} ec2 run-instances --image-id $ami_id --instance-type c5.metal --security-group-ids $sg_id --subnet-id $subnet_id --key-name "$ssh_key" --count 1 --query 'Instances[0].InstanceId' --output text --user-data "$user_data")
 
 # Set Name tag of instance
 aws --region ${region} ec2 create-tags --resources $instance_id --tags Key=Name,Value=$instance_name
