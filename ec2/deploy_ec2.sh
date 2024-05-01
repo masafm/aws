@@ -66,7 +66,7 @@ hostname="$(echo $instance_name | sed -e 's/\./-/g')"
 
 if [[ $ami_platform != windows ]]; then
     user_data=$(cat <<EOF
-#!/bin/bash
+#!/bin/bash -x
 echo "ubuntu:Datadog/4u" | sudo chpasswd
 sudo sh -c "echo \"$hostname\" >/etc/hostname"
 sudo sh -c "hostname \"$hostname\""
@@ -89,7 +89,8 @@ if [[ -n $DD_API_KEY ]] && [[ $ami_platform != windows ]]; then
     user_data+=$(cat <<EOF
 
 # Install Datadog Agent
-DD_API_KEY=${DD_API_KEY} DD_SITE=\"${DD_SITE:-datadoghq.com}\" bash -c \"\$(curl -L https://s3.amazonaws.com/dd-agent/scripts/install_script_agent7.sh)\""
+DD_API_KEY=${DD_API_KEY} DD_SITE="${DD_SITE:-datadoghq.com}" bash -c "\$(curl -L https://s3.amazonaws.com/dd-agent/scripts/install_script_agent7.sh)"
+# end
 EOF
 )
 elif [[ $ami_platform == windows ]]; then
