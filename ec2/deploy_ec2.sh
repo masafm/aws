@@ -6,22 +6,8 @@ region=${REGION:-"ap-northeast-1"}
 # Retrieve the username
 user_name=$(aws --region ${region} sts get-caller-identity --query 'Arn' --output text | rev | cut -d/ -f1 | rev | sed -e 's/@.*//')
         
-if [[ -n $SSH_KEY ]];then
-    ssh_key=$SSH_KEY
-else
-    aws --region $region ec2 describe-key-pairs --query 'KeyPairs[*].KeyName' --output text | tr '\t' '\n' | sort -f
-    echo ""
-    default_name=$user_name
-    echo "Please find your SSH key pair name from above list"
-    echo -n "Enter your ssh key name [$default_name]: "
-    read ssh_key
-    ssh_key=${ssh_key:-$default_name}
-fi
-timestamp=$(date +%s)
-
 # Retrieve my public IP address
 my_ip=$(curl -s https://checkip.amazonaws.com)
-
 
 # Specify the AMI ID and instance type
 ami_id=${AMI_ID:-"ami-0adb3635eb20f395b"}
@@ -38,6 +24,22 @@ else
   ami_platform="other"
   echo "The OS of AMI ID $ami_id could not be determined or it is not a standard Linux or Windows image."
 fi
+
+# Get SSH key pair name
+if [[ -n $SSH_KEY ]];then
+    ssh_key=$SSH_KEY
+else
+    default_name=$user_name
+    if [[ $ami_platform != windows ]];then
+        aws --region $region ec2 describe-key-pairs --query 'KeyPairs[*].KeyName' --output text | tr '\t' '\n' | sort -f
+        echo ""
+        echo "Please find your SSH key pair name from above list"
+        echo -n "Enter your ssh key name [$default_name]: "
+        read ssh_key
+    fi
+    ssh_key=${ssh_key:-$default_name}
+fi
+timestamp=$(date +%s)
 
 # Set the instance name based on the username
 instance_name="${user_name}-${ami_platform}-${timestamp}"
@@ -68,18 +70,21 @@ if [[ $ami_platform != windows ]]; then
 echo "ubuntu:Datadog/4u" | sudo chpasswd
 sudo sh -c "echo \"$hostname\" >/etc/hostname"
 sudo sh -c "hostname \"$hostname\""
-
 EOF
 )
 elif [[ $ami_platform == windows ]]; then
     user_data=$(cat <<EOF
 <powershell>
-
 EOF
 )
 fi
 
-if [[ -n $DD_API_KEY ]] && [[ $ami_platform == linux ]]; then
+if [[ -n $DD_VERSION ]];then
+    # Remove begining 7.
+    dd_version=${DD_VERSION/#7./}
+    dd_version=DD_AGENT_MINOR_VERSION=$dd_version
+fi
+if [[ -n $DD_API_KEY ]] && [[ $ami_platform != windows ]]; then
     echo "Datadog Agent for linux will be installed"
     user_data+=$(cat <<EOF
 
@@ -97,8 +102,9 @@ elif [[ $ami_platform == windows ]]; then
 \$currentPath = [System.Environment]::GetEnvironmentVariable("PATH", "Machine")
 \$newPath = \$currentPath + ";" + \$newPath
 [System.Environment]::SetEnvironmentVariable("PATH", \$newPath, "Machine")
+
 # Install Datadog Agent
-Param(\$version)
+${DD_VERSION:+"\$version = \"$DD_VERSION\""}
 
 \$file = "datadog-agent-7-latest.amd64.msi"
 if (Test-Path \$file) {
