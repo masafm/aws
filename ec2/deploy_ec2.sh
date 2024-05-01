@@ -62,12 +62,31 @@ else
     sg_id=$(aws --region ${region} ec2 describe-security-groups --filters Name=vpc-id,Values=${vpc_id} Name=group-name,Values='default' --query 'SecurityGroups[0].GroupId' --output text)
 fi
 
-hostname="$(echo $instance_name | sed -e 's/\./-/g')"
+ami_info=$(aws ec2 describe-images --image-ids $ami_id --region $region --query 'Images[*].{Name:Name}' --output text | tr '[:upper:]' '[:lower:]' | tr -d '[:punct:]' | tr -d '[:space:]')
+if [[ $ami_info == *"amazonlinux"* ]]; then
+  default_user="ec2-user"
+elif [[ $ami_info == *"ubuntu"* ]]; then
+  default_user="ubuntu"
+elif [[ $ami_info == *"rhel"* ]]; then
+  default_user="ec2-user"
+elif [[ $ami_info == *"centos"* ]]; then
+  default_user="centos"
+elif [[ $ami_info == *"fedora"* ]]; then
+  default_user="fedora"
+elif [[ $ami_info == *"debian"* ]]; then
+  default_user="admin"
+elif [[ $ami_info == *"suse"* ]]; then
+  default_user="ec2-user"
+else
+  default_user="unknown"
+fi
+echo "Default user for AMI $ami_id is likely: $default_user"
 
+hostname="$(echo $instance_name | sed -e 's/\./-/g')"
 if [[ $ami_platform != windows ]]; then
     user_data=$(cat <<EOF
 #!/bin/bash -x
-echo "ubuntu:Datadog/4u" | sudo chpasswd
+echo "$default_user:Datadog/4u" | sudo chpasswd
 sudo sh -c "echo \"$hostname\" >/etc/hostname"
 sudo sh -c "hostname \"$hostname\""
 EOF
@@ -154,11 +173,11 @@ echo "AMI Platform: $ami_platform"
 echo "Public IP: $(aws --region $region ec2 describe-instances --instance-ids "${instance_id}" --query 'Reservations[*].Instances[*].PublicIpAddress' --output text 2>/dev/null)"
 echo "Private IP: $(aws --region $region ec2 describe-instances --instance-ids "${instance_id}" --query 'Reservations[*].Instances[*].PrivateIpAddress' --output text 2>/dev/null)"
 if [[ $ami_platform != windows ]]; then
-    echo "User Name: ubuntu or ec2-user"
+    echo "User Name: $default_user"
     echo "RDP Password: Datadog/4u"
 elif [[ $ami_platform == windows ]]; then
     echo "User Name: Administrator"
-    echo "RDP Password: Check AWS console"
+    echo "Password: Check AWS console"
 fi
 sleep 1
 aws_url="https://${region}.console.aws.amazon.com/ec2/home?region=${region}#InstanceDetails:instanceId=${instance_id}"
