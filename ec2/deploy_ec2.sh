@@ -328,6 +328,9 @@ elif [[ $ami_platform == windows ]]; then
         create_rdp_file "$private_ip" "Administrator" "$rdp_file"
         open $rdp_file
     fi    
+    if [[ "${ssh_yes_no,,}" == "y"* ]]; then
+        exit 0
+    fi
     echo -n "Open RDP to public IP(${public_ip}) ? [y/N]: "
     read rdp_yes_no
     rdp_yes_no=${rdp_yes_no:-"no"}
