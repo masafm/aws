@@ -30,14 +30,25 @@ if [[ -n $SSH_KEY ]];then
     ssh_key=$SSH_KEY
 else
     default_name=$user_name
-    aws --region $region ec2 describe-key-pairs --query 'KeyPairs[*].KeyName' --output text | tr '\t' '\n' | sort -f
+    # Retrieve key pair names using AWS CLI, replace tabs with newlines, and sort case-insensitively
+    key_names=$(aws --region $region ec2 describe-key-pairs --query 'KeyPairs[*].KeyName' --output text | tr '\t' '\n' | sort -f)
+    # Print table header
+    echo ""
+    printf "%-40s\n" "Key Name"
+    echo "--------------------------------------------"
+    # Loop through each key name and print it in a formatted manner
+    while read -r key_name; do
+        printf "| %-40s |\n" "$key_name"
+    done <<< "$key_names"
+    echo "--------------------------------------------"
     echo ""
     echo "Please find your SSH key pair name from above list"
     echo -n "Enter your ssh key name [$default_name]: "
     read ssh_key
     ssh_key=${ssh_key:-$default_name}
+    echo ""
 fi
-timestamp=$(date +%s)
+timestamp=$(date +%Y%m%d%H%M%S)
 
 # Set the instance name based on the username
 instance_name="${user_name}-${ami_platform}-${timestamp}"
@@ -60,28 +71,27 @@ else
     sg_id=$(aws --region ${region} ec2 describe-security-groups --filters Name=vpc-id,Values=${vpc_id} Name=group-name,Values='default' --query 'SecurityGroups[0].GroupId' --output text)
 fi
 
-ami_info=$(aws ec2 describe-images --image-ids $ami_id --region $region --query 'Images[*].{Name:Name}' --output text | tr '[:upper:]' '[:lower:]' | tr -d '[:punct:]' | tr -d '[:space:]')
-if [[ $ami_info == *"amazonlinux"* ]]; then
-  default_user="ec2-user"
-elif [[ $ami_info == *"ubuntu"* ]]; then
-  default_user="ubuntu"
-elif [[ $ami_info == *"rhel"* ]]; then
-  default_user="ec2-user"
-elif [[ $ami_info == *"centos"* ]]; then
-  default_user="centos"
-elif [[ $ami_info == *"fedora"* ]]; then
-  default_user="fedora"
-elif [[ $ami_info == *"debian"* ]]; then
-  default_user="admin"
-elif [[ $ami_info == *"suse"* ]]; then
-  default_user="ec2-user"
-else
-  default_user="unknown"
-fi
-echo "Default user for AMI $ami_id is likely: $default_user"
-
 hostname="$(echo $instance_name | sed -e 's/\./-/g')"
 if [[ $ami_platform != windows ]]; then
+    ami_info=$(aws ec2 describe-images --image-ids $ami_id --region $region --query 'Images[*].{Name:Name}' --output text | tr '[:upper:]' '[:lower:]' | tr -d '[:punct:]' | tr -d '[:space:]')
+    if [[ $ami_info == *"amazonlinux"* ]]; then
+        default_user="ec2-user"
+    elif [[ $ami_info == *"ubuntu"* ]]; then
+        default_user="ubuntu"
+    elif [[ $ami_info == *"rhel"* ]]; then
+        default_user="ec2-user"
+    elif [[ $ami_info == *"centos"* ]]; then
+        default_user="centos"
+    elif [[ $ami_info == *"fedora"* ]]; then
+        default_user="fedora"
+    elif [[ $ami_info == *"debian"* ]]; then
+        default_user="admin"
+    elif [[ $ami_info == *"suse"* ]]; then
+        default_user="ec2-user"
+    else
+        default_user="unknown"
+    fi
+    echo "Default user for AMI $ami_id is likely: $default_user"
     user_data=$(cat <<EOF
 #!/bin/bash -x
 echo "$default_user:Datadog/4u" | sudo chpasswd
@@ -172,8 +182,10 @@ echo "Subnet ID: ${subnet_id}"
 echo "Security Group ID: ${sg_id}"
 echo "AMI ID: ${ami_id}"
 echo "AMI Platform: $ami_platform"
-echo "Public IP: $(aws --region $region ec2 describe-instances --instance-ids "${instance_id}" --query 'Reservations[*].Instances[*].PublicIpAddress' --output text 2>/dev/null)"
-echo "Private IP: $(aws --region $region ec2 describe-instances --instance-ids "${instance_id}" --query 'Reservations[*].Instances[*].PrivateIpAddress' --output text 2>/dev/null)"
+public_ip=$(aws --region $region ec2 describe-instances --instance-ids "${instance_id}" --query 'Reservations[*].Instances[*].PublicIpAddress' --output text 2>/dev/null)
+private_ip=$(aws --region $region ec2 describe-instances --instance-ids "${instance_id}" --query 'Reservations[*].Instances[*].PrivateIpAddress' --output text 2>/dev/null)
+echo "Public IP: $public_ip"
+echo "Private IP: $private_ip"
 if [[ $ami_platform != windows ]]; then
     echo "User Name: $default_user"
     echo "Password: Datadog/4u"
@@ -183,18 +195,91 @@ elif [[ $ami_platform == windows ]]; then
     op item get "AWS ap-northeast-1" --fields "RSA PRIVATE KEY" | sed -e 's/"//g' >$temp_file
     password=""
     while [[ -z $password ]];do
-        password=$(aws ec2 get-password-data --instance-id i-06244122144d4e84f --priv-launch-key $temp_file --query 'PasswordData' --output text)
+        password=$(aws ec2 get-password-data --instance-id ${instance_id} --priv-launch-key $temp_file --query 'PasswordData' --output text)
         sleep 1
     done
     echo "Password: ${password}"
     rm -f "$temp_file"
 fi
+
 aws_url="https://${region}.console.aws.amazon.com/ec2/home?region=${region}#InstanceDetails:instanceId=${instance_id}"
-echo -n "Open $aws_url ? [y/N]:"
+echo -n "Open $aws_url ? [y/N]: "
 read open_url
 open_url=${open_url:-"no"}
 if [[ "${open_url,,}" == "y"* ]]; then
     open $aws_url
 fi
 
+if [[ $ami_platform != windows ]]; then
+    echo "aaaa"
+elif [[ $ami_platform == windows ]]; then
+    echo -n "Open RDP to private IP(${private_ip}) ? [y/N]: "
+    read rdp_private_ip
+    rdp_private_ip=${rdp_private_ip:-"no"}
+    if [[ "${rdp_private_ip,,}" == "y"* ]]; then
+        rdp_file=~/Downloads/${hostname}-${private_ip}.rdp
+        cat <<EOF >$rdp_file
+smart sizing:i:1
+armpath:s:
+enablerdsaadauth:i:0
+targetisaadjoined:i:0
+hubdiscoverygeourl:s:
+redirected video capture encoding quality:i:0
+camerastoredirect:s:
+gatewaybrokeringtype:i:0
+use redirection server name:i:0
+alternate shell:s:
+disable themes:i:0
+geo:s:
+disable cursor setting:i:1
+remoteapplicationname:s:
+resourceprovider:s:
+disable menu anims:i:1
+remoteapplicationcmdline:s:
+promptcredentialonce:i:0
+gatewaycertificatelogonauthority:s:
+audiocapturemode:i:0
+prompt for credentials on client:i:0
+allowed security protocols:s:*
+gatewayhostname:s:
+remoteapplicationprogram:s:
+gatewayusagemethod:i:2
+screen mode id:i:1
+use multimon:i:0
+authentication level:i:2
+desktopwidth:i:0
+desktopheight:i:0
+redirectsmartcards:i:1
+redirectclipboard:i:1
+forcehidpioptimizations:i:1
+drivestoredirect:s:
+loadbalanceinfo:s:
+networkautodetect:i:1
+enablecredsspsupport:i:1
+redirectprinters:i:1
+autoreconnection enabled:i:1
+session bpp:i:32
+administrative session:i:0
+audiomode:i:0
+bandwidthautodetect:i:1
+authoring tool:s:
+connection type:i:7
+remoteapplicationmode:i:0
+disable full window drag:i:0
+gatewayusername:s:
+dynamic resolution:i:1
+shell working directory:s:
+wvd endpoint pool:s:
+remoteapplicationappid:s:
+allow font smoothing:i:1
+connect to console:i:0
+disable wallpaper:i:0
+gatewayaccesstoken:s:
+auto connect:i:1
+full address:s:${private_ip}
+username:s:Administrator
+EOF
+    fi
+    open $rdp_file
+fi
 # Comment for avoiding unknown error
