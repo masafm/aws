@@ -1,6 +1,74 @@
 #!/bin/bash
 set -e
 
+function create_rdp_file {
+    rdp_addr=$1
+    rdp_user_name=$2
+    rdp_file=$3
+    cat <<EOF >$rdp_file
+smart sizing:i:1
+armpath:s:
+enablerdsaadauth:i:0
+targetisaadjoined:i:0
+hubdiscoverygeourl:s:
+redirected video capture encoding quality:i:0
+camerastoredirect:s:
+gatewaybrokeringtype:i:0
+use redirection server name:i:0
+alternate shell:s:
+disable themes:i:0
+geo:s:
+disable cursor setting:i:1
+remoteapplicationname:s:
+resourceprovider:s:
+disable menu anims:i:1
+remoteapplicationcmdline:s:
+promptcredentialonce:i:0
+gatewaycertificatelogonauthority:s:
+audiocapturemode:i:0
+prompt for credentials on client:i:0
+allowed security protocols:s:*
+gatewayhostname:s:
+remoteapplicationprogram:s:
+gatewayusagemethod:i:2
+screen mode id:i:1
+use multimon:i:0
+authentication level:i:2
+desktopwidth:i:0
+desktopheight:i:0
+redirectsmartcards:i:1
+redirectclipboard:i:1
+forcehidpioptimizations:i:1
+drivestoredirect:s:
+loadbalanceinfo:s:
+networkautodetect:i:1
+enablecredsspsupport:i:1
+redirectprinters:i:1
+autoreconnection enabled:i:1
+session bpp:i:32
+administrative session:i:0
+audiomode:i:0
+bandwidthautodetect:i:1
+authoring tool:s:
+connection type:i:7
+remoteapplicationmode:i:0
+disable full window drag:i:0
+gatewayusername:s:
+dynamic resolution:i:1
+shell working directory:s:
+wvd endpoint pool:s:
+remoteapplicationappid:s:
+allow font smoothing:i:1
+connect to console:i:0
+disable wallpaper:i:0
+gatewayaccesstoken:s:
+auto connect:i:1
+full address:s:${rdp_addr}
+username:s:${rdp_user_name}
+EOF
+    
+}
+
 # Retrieve the region
 region=${REGION:-"ap-northeast-1"}
 # Retrieve the username
@@ -73,7 +141,8 @@ fi
 
 hostname="$(echo $instance_name | sed -e 's/\./-/g')"
 if [[ $ami_platform != windows ]]; then
-    ami_info=$(aws ec2 describe-images --image-ids $ami_id --region $region --query 'Images[*].{Name:Name}' --output text | tr '[:upper:]' '[:lower:]' | tr -d '[:punct:]' | tr -d '[:space:]')
+    ami_info=$(aws ec2 describe-images --image-ids $ami_id --region $region --query 'Images[*].Description' --output text | tr '[:upper:]' '[:lower:]' | tr -d '[:punct:]' | tr -d '[:space:]')
+    echo "AMI Description: $ami_info"
     if [[ $ami_info == *"amazonlinux"* ]]; then
         default_user="ec2-user"
     elif [[ $ami_info == *"ubuntu"* ]]; then
@@ -123,6 +192,7 @@ EOF
 elif [[ $ami_platform == windows ]]; then
     if [[ -n $DD_API_KEY ]]; then
         echo "Datadog Agent for windows will be installed"
+        
         user_data+=$(cat <<EOF
 
 # Add Datadog Agent/bin to PATH
@@ -163,7 +233,7 @@ EOF
 fi
 
 # Get root volume
-volume_dev_name=$(aws ec2 describe-images --image-ids $ami_id --region ap-northeast-1 --query 'Images[0].BlockDeviceMappings[0].DeviceName' --output text)
+volume_dev_name=$(aws ec2 describe-images --image-ids $ami_id --region $region --query 'Images[0].BlockDeviceMappings[0].DeviceName' --output text)
 volume_size=${VOLUME_SIZE:-"100"}
 
 instance_type=${INSTANCE_TYPE:-"c5.xlarge"}
@@ -196,9 +266,10 @@ elif [[ $ami_platform == windows ]]; then
     password=""
     while [[ -z $password ]];do
         password=$(aws ec2 get-password-data --instance-id ${instance_id} --priv-launch-key $temp_file --query 'PasswordData' --output text)
-        sleep 1
+        sleep 3
     done
     echo "Password: ${password}"
+    echo -n "${password}" | pbcopy
     rm -f "$temp_file"
 fi
 
@@ -211,75 +282,52 @@ if [[ "${open_url,,}" == "y"* ]]; then
 fi
 
 if [[ $ami_platform != windows ]]; then
-    echo "aaaa"
+    echo -n "SSH to private IP(${private_ip}) ? [y/N]: "
+    read ssh_yes_no
+    ssh_yes_no=${ssh_yes_no:-"no"}
+    if [[ "${ssh_yes_no,,}" == "y"* ]]; then
+        echo "Exec: ssh ${default_user}@${private_ip}"
+        booted=""
+        while [[ -z $booted ]];do
+            echo "Wait for booting"
+            sleep 1
+            booted=$(echo test | nc $private_ip 22 || true)
+        done
+        ssh ${default_user}@${private_ip}
+    fi
+    if [[ "${ssh_yes_no,,}" == "y"* ]]; then
+        exit 0
+    fi
+    echo -n "SSH to public IP(${public_ip}) ? [y/N]: "
+    read ssh_yes_no
+    ssh_yes_no=${ssh_yes_no:-"no"}
+    if [[ "${ssh_yes_no,,}" == "y"* ]]; then
+        echo "Exec: ssh ${default_user}@${public_ip}"
+        while [[ -z $booted ]];do
+            echo "Wait for booting"
+            sleep 1
+            booted=$(echo test | nc $public_ip 22 || true)
+        done
+        ssh ${default_user}@${public_ip}
+    fi
+    
+    echo "ssh ${default_user}@"
 elif [[ $ami_platform == windows ]]; then
     echo -n "Open RDP to private IP(${private_ip}) ? [y/N]: "
-    read rdp_private_ip
-    rdp_private_ip=${rdp_private_ip:-"no"}
-    if [[ "${rdp_private_ip,,}" == "y"* ]]; then
+    read rdp_yes_no
+    rdp_yes_no=${rdp_yes_no:-"no"}
+    if [[ "${rdp_yes_no,,}" == "y"* ]]; then
         rdp_file=~/Downloads/${hostname}-${private_ip}.rdp
-        cat <<EOF >$rdp_file
-smart sizing:i:1
-armpath:s:
-enablerdsaadauth:i:0
-targetisaadjoined:i:0
-hubdiscoverygeourl:s:
-redirected video capture encoding quality:i:0
-camerastoredirect:s:
-gatewaybrokeringtype:i:0
-use redirection server name:i:0
-alternate shell:s:
-disable themes:i:0
-geo:s:
-disable cursor setting:i:1
-remoteapplicationname:s:
-resourceprovider:s:
-disable menu anims:i:1
-remoteapplicationcmdline:s:
-promptcredentialonce:i:0
-gatewaycertificatelogonauthority:s:
-audiocapturemode:i:0
-prompt for credentials on client:i:0
-allowed security protocols:s:*
-gatewayhostname:s:
-remoteapplicationprogram:s:
-gatewayusagemethod:i:2
-screen mode id:i:1
-use multimon:i:0
-authentication level:i:2
-desktopwidth:i:0
-desktopheight:i:0
-redirectsmartcards:i:1
-redirectclipboard:i:1
-forcehidpioptimizations:i:1
-drivestoredirect:s:
-loadbalanceinfo:s:
-networkautodetect:i:1
-enablecredsspsupport:i:1
-redirectprinters:i:1
-autoreconnection enabled:i:1
-session bpp:i:32
-administrative session:i:0
-audiomode:i:0
-bandwidthautodetect:i:1
-authoring tool:s:
-connection type:i:7
-remoteapplicationmode:i:0
-disable full window drag:i:0
-gatewayusername:s:
-dynamic resolution:i:1
-shell working directory:s:
-wvd endpoint pool:s:
-remoteapplicationappid:s:
-allow font smoothing:i:1
-connect to console:i:0
-disable wallpaper:i:0
-gatewayaccesstoken:s:
-auto connect:i:1
-full address:s:${private_ip}
-username:s:Administrator
-EOF
+        create_rdp_file "$private_ip" "Administrator" "$rdp_file"
+        open $rdp_file
+    fi    
+    echo -n "Open RDP to public IP(${public_ip}) ? [y/N]: "
+    read rdp_yes_no
+    rdp_yes_no=${rdp_yes_no:-"no"}
+    if [[ "${rdp_yes_no,,}" == "y"* ]]; then
+        rdp_file=~/Downloads/${hostname}-${public_ip}.rdp
+        create_rdp_file "$public_ip" "Administrator" "$rdp_file"
+        open $rdp_file
     fi
-    open $rdp_file
 fi
 # Comment for avoiding unknown error
