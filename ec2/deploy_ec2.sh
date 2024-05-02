@@ -30,13 +30,11 @@ if [[ -n $SSH_KEY ]];then
     ssh_key=$SSH_KEY
 else
     default_name=$user_name
-    if [[ $ami_platform != windows ]];then
-        aws --region $region ec2 describe-key-pairs --query 'KeyPairs[*].KeyName' --output text | tr '\t' '\n' | sort -f
-        echo ""
-        echo "Please find your SSH key pair name from above list"
-        echo -n "Enter your ssh key name [$default_name]: "
-        read ssh_key
-    fi
+    aws --region $region ec2 describe-key-pairs --query 'KeyPairs[*].KeyName' --output text | tr '\t' '\n' | sort -f
+    echo ""
+    echo "Please find your SSH key pair name from above list"
+    echo -n "Enter your ssh key name [$default_name]: "
+    read ssh_key
     ssh_key=${ssh_key:-$default_name}
 fi
 timestamp=$(date +%s)
@@ -154,9 +152,13 @@ EOF
     fi
 fi
 
+# Get root volume
+volume_dev_name=$(aws ec2 describe-images --image-ids $ami_id --region ap-northeast-1 --query 'Images[0].BlockDeviceMappings[0].DeviceName' --output text)
+volume_size=${VOLUME_SIZE:-"100"}
+
 instance_type=${INSTANCE_TYPE:-"c5.xlarge"}
 # Deploy instance from AMI
-instance_id=$(aws --region ${region} ec2 run-instances --image-id $ami_id --instance-type ${instance_type} --security-group-ids $sg_id --subnet-id $subnet_id --key-name "$ssh_key" --count 1 --query 'Instances[0].InstanceId' --output text --user-data "$user_data")
+instance_id=$(aws --region ${region} ec2 run-instances --image-id $ami_id --instance-type ${instance_type} --security-group-ids $sg_id --subnet-id $subnet_id --key-name "$ssh_key" --count 1 --block-device-mappings "DeviceName=${volume_dev_name},Ebs={VolumeSize=${volume_size},VolumeType=gp3,DeleteOnTermination=true}" --query 'Instances[0].InstanceId' --output text --user-data "$user_data")
 
 # Set Name tag of instance
 aws --region ${region} ec2 create-tags --resources $instance_id --tags Key=Name,Value=$instance_name
@@ -174,14 +176,25 @@ echo "Public IP: $(aws --region $region ec2 describe-instances --instance-ids "$
 echo "Private IP: $(aws --region $region ec2 describe-instances --instance-ids "${instance_id}" --query 'Reservations[*].Instances[*].PrivateIpAddress' --output text 2>/dev/null)"
 if [[ $ami_platform != windows ]]; then
     echo "User Name: $default_user"
-    echo "RDP Password: Datadog/4u"
+    echo "Password: Datadog/4u"
 elif [[ $ami_platform == windows ]]; then
     echo "User Name: Administrator"
-    echo "Password: Check AWS console"
+    temp_file=$(mktemp)
+    op item get "AWS ap-northeast-1" --fields "RSA PRIVATE KEY" | sed -e 's/"//g' >$temp_file
+    password=""
+    while [[ -z $password ]];do
+        password=$(aws ec2 get-password-data --instance-id i-06244122144d4e84f --priv-launch-key $temp_file --query 'PasswordData' --output text)
+        sleep 1
+    done
+    echo "Password: ${password}"
+    rm -f "$temp_file"
 fi
-sleep 1
 aws_url="https://${region}.console.aws.amazon.com/ec2/home?region=${region}#InstanceDetails:instanceId=${instance_id}"
-echo $aws_url
-open $aws_url
+echo -n "Open $aws_url ? [y/N]:"
+read open_url
+open_url=${open_url:-"no"}
+if [[ "${open_url,,}" == "y"* ]]; then
+    open $aws_url
+fi
 
 # Comment for avoiding unknown error
