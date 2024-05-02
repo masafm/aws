@@ -66,7 +66,6 @@ auto connect:i:1
 full address:s:${rdp_addr}
 username:s:${rdp_user_name}
 EOF
-    
 }
 
 # Retrieve the region
@@ -98,34 +97,39 @@ if [[ -n $SSH_KEY ]];then
     ssh_key=$SSH_KEY
 else
     default_name=$user_name
-    # Retrieve key pair names using AWS CLI, replace tabs with newlines, and sort case-insensitively
-    key_names=$(aws --region $region ec2 describe-key-pairs --query 'KeyPairs[*].KeyName' --output text | tr '\t' '\n' | sort -f)
-    # Print table header
-    echo ""
-    printf "%-40s\n" "Key Name"
-    echo "--------------------------------------------"
-    # Loop through each key name and print it in a formatted manner
-    while read -r key_name; do
-        printf "| %-40s |\n" "$key_name"
-    done <<< "$key_names"
-    echo "--------------------------------------------"
-    echo ""
-    echo "Please find your SSH key pair name from above list"
-    echo -n "Enter your ssh key name [$default_name]: "
-    read ssh_key
-    ssh_key=${ssh_key:-$default_name}
-    echo ""
+    items=$(aws --region $region ec2 describe-key-pairs --query 'KeyPairs[*].KeyName' --output text | tr '\t' '\n' | sort -f)
+    default_name_exist=$(echo "$items" | grep "^$default_name$" || true)
+    if [[ -n $default_name_exist ]]; then
+        items=$(echo "$items" | grep -v "^$default_name$" | sort)
+        ssh_key=$(echo -e "$default_name\n$items" | fzf --header "Select your SSH key name")
+    else
+        ssh_key=$(echo -e "$items" | fzf --header "Select your SSH key name")
+    fi
 fi
+
 timestamp=$(date +%Y%m%d%H%M%S)
 
 # Set the instance name based on the username
 instance_name="${user_name}-${ami_platform}-${timestamp}"
 
 # Create a security group
-subnet_id=${SUBNET_ID:-"subnet-099904a6ad96204d6"}
+if [[ $user_name == masafumi.kashiwagi ]];then
+    subnet_id=${SUBNET_ID:-"subnet-099904a6ad96204d6"}
+else
+    subnet_id=${SUBNET_ID:-"subnet-8a85c0a2"}
+fi
 vpc_id=$(aws --region ${region} ec2 describe-subnets --subnet-ids $subnet_id --query 'Subnets[*].VpcId' --output text)
-SG_CREATE=$(echo $SG_CREATE | tr '[:upper:]' '[:lower:]')
-if [[ -n $SG_CREATE ]] && [[ "${SG_CREATE}" != "false" ]]; then
+if [[ -z $SG_CREATE ]];then
+    echo -n "Create new security group? [y/N]: "
+    sg_create_def=no
+    read sg_create
+    sg_create=${sg_create:-$sg_create_def}
+elif [[ -n $SG_CREATE ]] && [[ "${SG_CREATE,,}" == "f"* ]]; then
+    sg_create=no
+elif [[ -n $SG_CREATE ]] && [[ "${SG_CREATE,,}" == "t"* ]]; then
+    sg_create=yes
+fi
+if [[ "${sg_create,,}" == "y"* ]]; then
     sg_id=$(aws --region ${region} ec2 create-security-group --group-name "$instance_name" --description "Security group for SSH and RDP access" --query 'GroupId' --vpc-id "$vpc_id" --output text)
     # Allow SSH access (port 22)
     aws --region ${region} ec2 authorize-security-group-ingress --group-id $sg_id --protocol tcp --port 22 --cidr ${my_ip}/32
@@ -175,32 +179,47 @@ EOF
 )
 fi
 
+dd_versions=$(curl -L https://ddagent-windows-stable.s3.amazonaws.com/installers_v2.json 2>/dev/null | python3 -c "import sys, json, re; print('\n'.join([re.sub(r'-\d+$', '', key) for key in json.load(sys.stdin)['datadog-agent'].keys()]))" | sort -r | grep -e '^7\.')
 if [[ -n $DD_VERSION ]];then
     # Remove begining 7.
-    dd_version=${DD_VERSION/#7./}
-    dd_version=DD_AGENT_MINOR_VERSION=$dd_version
-    dd_versions=$(curl -L https://ddagent-windows-stable.s3.amazonaws.com/installers_v2.json 2>/dev/null)
-    dd_version_exists=$(echo "$dd_versions" | grep $DD_VERSION || true)
+    dd_version=$DD_VERSION
+    dd_minor_version=${dd_version/#7./}
+    dd_minor_version=DD_AGENT_MINOR_VERSION=$dd_minor_version
+    dd_version_exists=$(echo "$dd_versions" | grep $dd_version || true)
     if [[ -z $dd_version_exists ]];then
-        echo "Invalid Datadog Agent version: $dd_version"
+        echo "Invalid Datadog Agent version: $DD_VERSION"
         echo "$dd_versions" | grep -e '7\..*-'
         exit 1
     fi
+else
+    dd_version=$(echo "$dd_versions" | fzf --header "Datadog Agent version")
+    dd_minor_version=${dd_version/#7./}
+    dd_minor_version=DD_AGENT_MINOR_VERSION=$dd_minor_version
 fi
-if [[ -n $DD_API_KEY ]] && [[ $ami_platform != windows ]]; then
+
+if [[ -n $DD_API_KEY ]];then
+    dd_api_key=$DD_API_KEY
+else
+    echo -n "Enter Datadog API key: "
+    read dd_api_key
+    if [[ -z $dd_api_key ]];then
+        echo "API key is required!"
+        exit 1
+    fi
+fi
+
+if [[ $ami_platform != windows ]]; then
     echo "Datadog Agent for linux will be installed"
     user_data+=$(cat <<EOF
 
 # Install Datadog Agent
-DD_API_KEY=${DD_API_KEY} DD_SITE="${DD_SITE:-datadoghq.com}" bash -c "\$(curl -L https://s3.amazonaws.com/dd-agent/scripts/install_script_agent7.sh)"
+DD_API_KEY=${dd_api_key} DD_SITE="${DD_SITE:-datadoghq.com}" ${dd_minor_version} bash -c "\$(curl -L https://s3.amazonaws.com/dd-agent/scripts/install_script_agent7.sh)"
 # end
 EOF
 )
 elif [[ $ami_platform == windows ]]; then
-    if [[ -n $DD_API_KEY ]]; then
-        echo "Datadog Agent for windows will be installed"
-        
-        user_data+=$(cat <<EOF
+    echo "Datadog Agent for windows will be installed"
+    user_data+=$(cat <<EOF
 
 # Add Datadog Agent/bin to PATH
 \$newPath = "C:\Program Files\Datadog\Datadog Agent\bin"
@@ -227,16 +246,15 @@ if (-not (Test-Path \$file)) {
     Write-Host "Download finished"
 }
 \$now = (Get-Date).ToString("yyyyMMddHHmmss")
-Start-Process -Wait msiexec -ArgumentList "/qn /log C:/\$file.\$now.log /i \$file DDAGENTUSER_NAME=.\\ddagentuser DDAGENTUSER_PASSWORD=ji7689sGHKJUH@ APIKEY=${DD_API_KEY}"
+Start-Process -Wait msiexec -ArgumentList "/qn /log C:/\$file.\$now.log /i \$file DDAGENTUSER_NAME=.\\ddagentuser DDAGENTUSER_PASSWORD=ji7689sGHKJUH@ APIKEY=${dd_api_key}"
 </powershell>
 EOF
 )
-    else
-        user_data+=$(cat <<EOF
+else
+    user_data+=$(cat <<EOF
 </powershell>
 EOF
 )
-    fi
 fi
 
 # Get root volume
@@ -252,6 +270,7 @@ aws --region ${region} ec2 create-tags --resources $instance_id --tags Key=Name,
 
 # Output the instance name
 echo "---------------------------------"
+echo "Datadog Agent version: ${dd_version}"
 echo "Instance name: ${instance_name}"
 echo "Instance ID: ${instance_id}"
 echo "VPC ID: ${vpc_id}"
@@ -271,11 +290,24 @@ elif [[ $ami_platform == windows ]]; then
     temp_file=$(mktemp)
     op item get "AWS ap-northeast-1" --fields "RSA PRIVATE KEY" | sed -e 's/"//g' >$temp_file
     password=""
-    while [[ -z $password ]];do
-        password=$(aws ec2 get-password-data --instance-id ${instance_id} --priv-launch-key $temp_file --query 'PasswordData' --output text)
+    max_attempts=40
+    for ((i=1; i<=max_attempts; i++)); do
+        password=$(aws ec2 get-password-data --instance-id "${instance_id}" --priv-launch-key "$temp_file" --query 'PasswordData' --output text)
+        # Show progress bar
+        percent=$((i * 100 / max_attempts))
+        bar=$(printf '%*s' $((i*40/max_attempts)) '' | tr ' ' '#')
+        printf "\rWait for password generation: [%-50s] %d%%" "$bar" "$percent"
+        if [[ -n $password ]]; then
+            # Clear the progress bar by printing spaces and move cursor up
+            printf "\r%-120s\r"
+            # Optional: Move cursor up to overwrite the progress line
+            echo -ne "\033[1A"  # Move cursor up one line
+            break
+        fi
         sleep 3
-    done
-    echo "Password: ${password}"
+done
+    printf "\rPassword: "
+    echo "${password}"
     echo -n "${password}" | pbcopy
     rm -f "$temp_file"
 fi
@@ -293,14 +325,14 @@ if [[ $ami_platform != windows ]]; then
     read ssh_yes_no
     ssh_yes_no=${ssh_yes_no:-"no"}
     if [[ "${ssh_yes_no,,}" == "y"* ]]; then
-        echo "Exec: ssh ${default_user}@${private_ip}"
+        echo "Exec: ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null ${default_user}@${private_ip}"
         booted=""
         while [[ -z $booted ]];do
             echo "Wait for booting"
             sleep 1
             booted=$(echo test | nc $private_ip 22 || true)
         done
-        ssh ${default_user}@${private_ip}
+        ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null ${default_user}@${private_ip}
     fi
     if [[ "${ssh_yes_no,,}" == "y"* ]]; then
         exit 0
@@ -309,13 +341,13 @@ if [[ $ami_platform != windows ]]; then
     read ssh_yes_no
     ssh_yes_no=${ssh_yes_no:-"no"}
     if [[ "${ssh_yes_no,,}" == "y"* ]]; then
-        echo "Exec: ssh ${default_user}@${public_ip}"
+        echo "Exec: ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null ${default_user}@${public_ip}"
         while [[ -z $booted ]];do
             echo "Wait for booting"
             sleep 1
             booted=$(echo test | nc $public_ip 22 || true)
         done
-        ssh ${default_user}@${public_ip}
+        ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null ${default_user}@${public_ip}
     fi
     
     echo "ssh ${default_user}@"
@@ -328,9 +360,6 @@ elif [[ $ami_platform == windows ]]; then
         create_rdp_file "$private_ip" "Administrator" "$rdp_file"
         open $rdp_file
     fi    
-    if [[ "${ssh_yes_no,,}" == "y"* ]]; then
-        exit 0
-    fi
     echo -n "Open RDP to public IP(${public_ip}) ? [y/N]: "
     read rdp_yes_no
     rdp_yes_no=${rdp_yes_no:-"no"}
