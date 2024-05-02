@@ -305,7 +305,7 @@ elif [[ $ami_platform == windows ]]; then
             break
         fi
         sleep 3
-done
+    done
     printf "\rPassword: "
     echo "${password}"
     echo -n "${password}" | pbcopy
