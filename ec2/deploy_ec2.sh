@@ -349,10 +349,8 @@ if [[ $ami_platform != windows ]]; then
         done
         ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null ${default_user}@${public_ip}
     fi
-    
-    echo "ssh ${default_user}@"
 elif [[ $ami_platform == windows ]]; then
-    echo -n "Open RDP to private IP(${private_ip}) ? [y/N]: "
+    echo -n "Open RDP to private IP(${private_ip})? [y/N]: "
     read rdp_yes_no
     rdp_yes_no=${rdp_yes_no:-"no"}
     if [[ "${rdp_yes_no,,}" == "y"* ]]; then
@@ -360,7 +358,7 @@ elif [[ $ami_platform == windows ]]; then
         create_rdp_file "$private_ip" "Administrator" "$rdp_file"
         open $rdp_file
     fi    
-    echo -n "Open RDP to public IP(${public_ip}) ? [y/N]: "
+    echo -n "Open RDP to public IP(${public_ip})? [y/N]: "
     read rdp_yes_no
     rdp_yes_no=${rdp_yes_no:-"no"}
     if [[ "${rdp_yes_no,,}" == "y"* ]]; then
