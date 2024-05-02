@@ -179,6 +179,13 @@ if [[ -n $DD_VERSION ]];then
     # Remove begining 7.
     dd_version=${DD_VERSION/#7./}
     dd_version=DD_AGENT_MINOR_VERSION=$dd_version
+    dd_versions=$(curl -L https://ddagent-windows-stable.s3.amazonaws.com/installers_v2.json 2>/dev/null)
+    dd_version_exists=$(echo "$dd_versions" | grep $DD_VERSION || true)
+    if [[ -z $dd_version_exists ]];then
+        echo "Invalid Datadog Agent version: $dd_version"
+        echo "$dd_versions" | grep -e '7\..*-'
+        exit 1
+    fi
 fi
 if [[ -n $DD_API_KEY ]] && [[ $ami_platform != windows ]]; then
     echo "Datadog Agent for linux will be installed"
