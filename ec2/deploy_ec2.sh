@@ -137,6 +137,8 @@ function get_linux_default_user {
         echo "ec2-user"
     elif [[ $ami_info == *"ubuntu"* ]]; then
         echo "ubuntu"
+    elif [[ $ami_info == *"redhat"* ]]; then
+        echo "ec2-user"
     elif [[ $ami_info == *"rhel"* ]]; then
         echo "ec2-user"
     elif [[ $ami_info == *"centos"* ]]; then
@@ -288,7 +290,7 @@ function get_windows_password {
     echo $password
 }
 
-function get_secret_file {
+function get_secret_local_file {
     local ssh_key_name=$1
     local secret_file
     # Check for locally saved pem files
@@ -298,7 +300,13 @@ function get_secret_file {
     else
         secret_file=$secret_files
     fi
-    if [[ -z $secret_file ]] && command -v op &> /dev/null;then
+    echo $secret_file
+}
+
+function get_secret_1password {
+    local ssh_key_name=$1
+    local secret_file
+    if command -v op &> /dev/null;then
         secret_file=$(mktemp)
         local keys=("private key")
         if [[ -n $(echo $LANG | grep -i ja_JP) ]];then
@@ -315,48 +323,49 @@ function get_secret_file {
     echo $secret_file
 }
 
-function open_aws_console_page {
-    local open_url
-    local aws_url="https://${REGION}.console.aws.amazon.com/ec2/home?region=${REGION}#InstanceDetails:instanceId=${instance_id}"
-    echo -n "Open $aws_url ? [y/N]: " 1>&2
-    read open_url
-    open_url=${open_url:-"no"}
-    if [[ "${open_url,,}" == "y"* ]]; then
-        open $aws_url
+function get_secret_file_path {
+    local ssh_key_name=$1
+    local secret_file=$(get_secret_local_file "$ssh_key_name")
+    if [[ -z $secret_file ]];then
+        secret_file=$(get_secret_1password "$ssh_key_name")
     fi
+    echo $secret_file
 }
 
-function ssh_to_host {
-    local username=$1
-    local addr=$2
-    local ssh_key_name=$3
-    local secret=$(get_secret_file "$ssh_key_name")
-    local ssh_opts=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null)
-    local ssh_cmd=(ssh "${ssh_opts[@]}" "${username}@${addr}")
+function is_ssh_available {
+    is_tcp_port_available 22 "$@"
+}
 
-    if [[ -n $secret ]]; then
-        ssh_cmd+=(-i "$secret")
-    fi
+function is_rdp_available {
+    is_tcp_port_available 3389 "$@"
+}
 
-    echo "Exec: ${ssh_cmd[*]}" 1>&2
-    local ssh_avail=""
+function is_tcp_port_available {
+    local tcp_port=$1
+    shift
+    local addr_array=("$@")
+    local port_avail=""
     local max_attempts=40
     for ((i=1; i<=max_attempts; i++)); do
-        ssh_avail=$(echo test | nc -G2 $addr 22 || true)
-        # Show progress bar
-        local percent=$((i * 100 / max_attempts))
-        local bar_len=50
-        local bar=$(printf '%*s' $((i*bar_len/max_attempts)) '' | tr ' ' '#')
-        printf "\rWait for ssh availability: [%-${bar_len}s] %d%%" "$bar" "$percent" 1>&2
-        if [[ -n $ssh_avail ]]; then
+        for addr in "${addr_array[@]}"; do
+            port_avail=$(nc -z -G2 $addr $tcp_port 2>&1 | grep -i succeeded || true)
+            # Show progress bar
+            local percent=$((i * 100 / max_attempts))
+            local bar_len=50
+            local bar=$(printf '%*s' $((i*bar_len/max_attempts)) '' | tr ' ' '#')
+            printf "\rWait for TCP port $tcp_port availability: [%-${bar_len}s] %d%%" "$bar" "$percent" 1>&2
+            if [[ -n $port_avail ]]; then
+                echo $addr
+                break
+            fi
+        done
+        if [[ -n $port_avail ]]; then
             break
         fi
         sleep 1
     done
-    sleep 3
     # Clear the progress bar by printing spaces and move cursor up
     printf "\r%-120s\r" 1>&2
-    "${ssh_cmd[@]}"
 }
 
 function main {
@@ -439,7 +448,7 @@ function main {
     # Deploy Instance
     local instance_id=$(deploy_ec2_instance "$ssh_key_name" "$sg_id")
 
-    # Output the instance name
+    # Output the instance information
     echo "---------------------------------"
     echo "Datadog Agent version: ${dd_version}"
     echo "Instance name: ${instance_name}"
@@ -450,59 +459,44 @@ function main {
     echo "AMI ID: ${AMI_ID}"
     echo "AMI Description: $(get_ami_description)"
     echo "AMI Platform: $ami_platform"
-    local public_ip=$(get_public_ip $instance_id)
     local private_ip=$(get_private_ip $instance_id)
-    echo "Public IP: $public_ip"
-    echo "Private IP: $private_ip"
-
+    local public_ip=$(get_public_ip $instance_id)
+    [[ -n $private_ip ]] && echo "Private IP: $private_ip"
+    [[ -n $public_ip ]] && echo "Public IP: $public_ip"
     if [[ $ami_platform != windows ]]; then
         echo "User Name: $default_user"
         echo "Password: Datadog/4u"
     elif [[ $ami_platform == windows ]]; then
         echo "User Name: Administrator"
-        local secret_file=$(get_secret_file "$ssh_key_name")
+        local secret_file=$(get_secret_file_path "$ssh_key_name")
         echo "pem file for Windows password decryption: $secret_file"
         local password=$(get_windows_password $instance_id "$secret_file")
         printf "Password: "
         echo "${password}"
         echo -n "${password}" | pbcopy
     fi
-
-    open_aws_console_page
-
+    echo "URL: https://${REGION}.console.aws.amazon.com/ec2/home?region=${REGION}#InstanceDetails:instanceId=${instance_id}"
+    echo "---------------------------------"
+    
+    local addr_array=("$private_ip" "$public_ip")
     if [[ $ami_platform != windows ]]; then
-        echo -n "SSH to private IP(${private_ip}) ? [y/N]: "
-        local do_ssh
-        read do_ssh
-        do_ssh=${do_ssh:-"no"}
-        if [[ "${do_ssh,,}" == "y"* ]]; then
-            ssh_to_host $default_user $private_ip "$ssh_key_name"
-            exit 0
+        local addr=$(is_ssh_available "${addr_array[@]}")
+        echo "SSH to $addr is available now"
+        local ssh_opts=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null)
+        local ssh_cmd=(ssh "${ssh_opts[@]}" "${default_user}@${addr}")
+        local secret=$(get_secret_local_file "$ssh_key_name")
+        if [[ -n $secret ]]; then
+            ssh_cmd+=(-i \"$secret\")
         fi
-        echo -n "SSH to public IP(${public_ip}) ? [y/N]: "
-        read do_ssh
-        do_ssh=${do_ssh:-"no"}
-        if [[ "${do_ssh,,}" == "y"* ]]; then
-            ssh_to_host $default_user $public_ip "$ssh_key_name"
-        fi
+        local cmd="${ssh_cmd[@]}"
+        echo "Command is in clip board: $cmd"
+        echo -n $cmd | pbcopy
     elif [[ $ami_platform == windows ]]; then
-        echo -n "Open RDP to private IP(${private_ip})? [y/N]: "
-        local do_rdp rdp_file
-        read do_rdp
-        do_rdp=${do_rdp:-"no"}
-        if [[ "${do_rdp,,}" == "y"* ]]; then
-            rdp_file=~/Downloads/${hostname}-${private_ip}.rdp
-            create_rdp_file "$private_ip" "Administrator" "$rdp_file"
-            open $rdp_file
-        fi    
-        echo -n "Open RDP to public IP(${public_ip})? [y/N]: "
-        read do_rdp
-        do_rdp=${do_rdp:-"no"}
-        if [[ "${do_rdp,,}" == "y"* ]]; then
-            rdp_file=~/Downloads/${hostname}-${public_ip}.rdp
-            create_rdp_file "$public_ip" "Administrator" "$rdp_file"
-            open $rdp_file
-        fi
+        local addr=$(is_rdp_available "${addr_array[@]}")
+        echo "RDP to $addr is available now"
+        local rdp_file=~/Downloads/${hostname}-${addr}.rdp
+        create_rdp_file "$addr" "Administrator" "$rdp_file"
+        open ~/Downloads
     fi
 }
 
