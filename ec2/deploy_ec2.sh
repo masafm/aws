@@ -78,10 +78,9 @@ my_ip=$(curl -s https://checkip.amazonaws.com)
 
 # Specify the AMI ID and instance type
 ami_id=${AMI_ID:-"ami-0adb3635eb20f395b"}
-ami_info=$(aws --region ${region} ec2 describe-images --image-ids "$ami_id" --query 'Images[*].{Platform:Platform,Name:Name}' --output json)
-
+ami_info=$(aws --region ${region} ec2 describe-images --image-ids "$ami_id" --output json)
 # Determine the OS using the Platform attribute
-if echo "$ami_info" | grep -q '"Platform": "windows"'; then
+if echo "$ami_info" | grep -iq 'windows'; then
   ami_platform="windows"
   echo "The AMI ID $ami_id is a Windows image."
 elif echo "$ami_info" | grep -iq 'linux'; then
@@ -107,7 +106,7 @@ else
     fi
 fi
 
-timestamp=$(date +%Y%m%d%H%M%S)
+timestamp=$(date +%Y%m%d-%H%M%S)
 
 # Set the instance name based on the username
 instance_name="${user_name}-${ami_platform}-${timestamp}"
@@ -212,6 +211,9 @@ if [[ $ami_platform != windows ]]; then
     echo "Datadog Agent for linux will be installed"
     user_data+=$(cat <<EOF
 
+sudo sh -c "echo '---------------------------------------------------------------------------'>>/etc/motd"
+sudo sh -c "echo 'Run \033[1;31mtail -f /var/log/cloud-init-output.log\033[0m for Datadog Agent install status' >> /etc/motd"
+sudo sh -c "echo '---------------------------------------------------------------------------'>>/etc/motd"
 # Install Datadog Agent
 DD_API_KEY=${dd_api_key} DD_SITE="${DD_SITE:-datadoghq.com}" ${dd_minor_version} bash -c "\$(curl -L https://s3.amazonaws.com/dd-agent/scripts/install_script_agent7.sh)"
 # end
@@ -325,14 +327,16 @@ if [[ $ami_platform != windows ]]; then
     read ssh_yes_no
     ssh_yes_no=${ssh_yes_no:-"no"}
     if [[ "${ssh_yes_no,,}" == "y"* ]]; then
-        echo "Exec: ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null ${default_user}@${private_ip}"
+        ssh_cmd="ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null ${default_user}@${private_ip}"
+        echo "Exec: $ssh_cmd"
         booted=""
         while [[ -z $booted ]];do
             echo "Wait for booting"
             sleep 1
             booted=$(echo test | nc $private_ip 22 || true)
         done
-        ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null ${default_user}@${private_ip}
+        sleep 1
+        $ssh_cmd
     fi
     if [[ "${ssh_yes_no,,}" == "y"* ]]; then
         exit 0
@@ -341,13 +345,15 @@ if [[ $ami_platform != windows ]]; then
     read ssh_yes_no
     ssh_yes_no=${ssh_yes_no:-"no"}
     if [[ "${ssh_yes_no,,}" == "y"* ]]; then
-        echo "Exec: ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null ${default_user}@${public_ip}"
+        ssh_cmd="ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null ${default_user}@${public_ip}"
+        echo "Exec: $ssh_cmd"
         while [[ -z $booted ]];do
             echo "Wait for booting"
             sleep 1
             booted=$(echo test | nc $public_ip 22 || true)
         done
-        ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null ${default_user}@${public_ip}
+        sleep 1
+        $ssh_cmd
     fi
 elif [[ $ami_platform == windows ]]; then
     echo -n "Open RDP to private IP(${private_ip})? [y/N]: "
