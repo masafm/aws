@@ -179,7 +179,7 @@ echo "$default_user:Datadog/4u" | sudo chpasswd
 sudo sh -c "echo \"$hostname\" >/etc/hostname"
 sudo sh -c "hostname \"$hostname\""
 sudo sh -c "echo '---------------------------------------------------------------------------'>>/etc/motd"
-sudo sh -c "echo 'Run \033[1;31mtail -f /var/log/cloud-init-output.log\033[0m for Datadog Agent install status' >> /etc/motd"
+sudo sh -c "echo 'Run tail -f /var/log/cloud-init-output.log for Datadog Agent install status' >> /etc/motd"
 sudo sh -c "echo '---------------------------------------------------------------------------'>>/etc/motd"
 # Install Datadog Agent
 DD_API_KEY=${dd_api_key} DD_SITE="${DD_SITE:-datadoghq.com}" ${dd_version_minor} bash -c "\$(curl -L https://s3.amazonaws.com/dd-agent/scripts/install_script_agent${dd_version_major}.sh)"
@@ -404,10 +404,10 @@ function main {
     fi
 
     # SG_CREATE default is false/no
-    if [[ -z $SG_CREATE ]];then
-        echo -n "Create new security group? If not create, default security group will be used. [y/N]: "
+    if [[ -z $SG_CREATE ]] && [[ $user_name != masafumi.kashiwagi ]];then
+        echo -n "Create new security group? If not create, default security group will be used. [Y/n]: "
         read SG_CREATE
-        SG_CREATE=${SG_CREATE:-"false"}
+        SG_CREATE=${SG_CREATE:-"true"}
     fi
     local sg_id
     if [[ -n $SG_ID ]];then
