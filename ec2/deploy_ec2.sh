@@ -153,7 +153,7 @@ function get_linux_default_user {
 }
 
 function get_dd_version {
-    local dd_versions=$(curl -L https://ddagent-windows-stable.s3.amazonaws.com/installers_v2.json 2>/dev/null | python3 -c "import sys, json, re; print('\n'.join([re.sub(r'-\d+$', '', key) for key in json.load(sys.stdin)['datadog-agent'].keys()]))" | sort -r | grep -e '^7\.')
+    local dd_versions=$(curl -L https://ddagent-windows-stable.s3.amazonaws.com/installers_v2.json 2>/dev/null | python3 -c "import sys, json, re; print('\n'.join([re.sub(r'-\d+$', '', key) for key in json.load(sys.stdin)['datadog-agent'].keys()]))" | sort -r | grep -e '^[6-7]\.')
     if [[ -n $DD_VERSION ]];then
         local dd_version_exists=$(echo "$dd_versions" | grep -e "^${DD_VERSION}\$" || true)
         if [[ -n $dd_version_exists ]];then
@@ -168,8 +168,9 @@ function get_dd_version {
 }
 
 function create_linux_user_data {
-    local dd_version_linux=$1
-    local dd_api_key=$2
+    local dd_version_major=$1
+    local dd_version_minor="DD_AGENT_MINOR_VERSION=${2}"
+    local dd_api_key=$3
     cat <<EOF
 #!/bin/bash -x
 echo "$default_user:Datadog/4u" | sudo chpasswd
@@ -179,7 +180,7 @@ sudo sh -c "echo '--------------------------------------------------------------
 sudo sh -c "echo 'Run \033[1;31mtail -f /var/log/cloud-init-output.log\033[0m for Datadog Agent install status' >> /etc/motd"
 sudo sh -c "echo '---------------------------------------------------------------------------'>>/etc/motd"
 # Install Datadog Agent
-DD_API_KEY=${dd_api_key} DD_SITE="${DD_SITE:-datadoghq.com}" ${dd_version_linux} bash -c "\$(curl -L https://s3.amazonaws.com/dd-agent/scripts/install_script_agent7.sh)"
+DD_API_KEY=${dd_api_key} DD_SITE="${DD_SITE:-datadoghq.com}" ${dd_version_minor} bash -c "\$(curl -L https://s3.amazonaws.com/dd-agent/scripts/install_script_agent${dd_version_major}.sh)"
 # end
 EOF
 }
@@ -299,8 +300,17 @@ function get_secret_file {
     fi
     if [[ -z $secret_file ]] && command -v op &> /dev/null;then
         secret_file=$(mktemp)
+        local keys=("private key")
+        if [[ -n $(echo $LANG | grep -i ja_JP) ]];then
+            keys=("秘密鍵" "${keys[@]}")
+        fi
         item_title=$(op item list --vault="Private" --format=json | python3 -c "import sys, json; print('\n'.join([item['title'] for item in json.load(sys.stdin)]))" | fzf --height 30 --header "Select your 1Password item for ${ssh_key_name} ssh key pair")
-        op item get "$item_title" --fields "RSA PRIVATE KEY" | sed -e 's/"//g' >$secret_file
+        for i in "${keys[@]}"; do
+            op item get "$item_title" --fields "${i}" | sed -e 's/"//g' -e 's/BEGIN PRIVATE KEY/BEGIN RSA PRIVATE KEY/' -e 's/END PRIVATE KEY/END RSA PRIVATE KEY/' >$secret_file
+            if [[ -n $(cat $secret_file) ]];then
+                break
+            fi
+        done
     fi
     echo $secret_file
 }
@@ -401,8 +411,8 @@ function main {
     fi
 
     local dd_version=$(get_dd_version)
-    local dd_version_linux=${dd_version/#7./}
-    dd_version_linux="DD_AGENT_MINOR_VERSION=$dd_version_linux"
+    local dd_version_minor=$(echo $dd_version | sed -e 's/[0-9]*\.//')
+    local dd_version_major=$(echo $dd_version | sed -e 's/\.[0-9.]*//')
     local dd_api_key=$(get_dd_api_key)
     local hostname="$(echo $instance_name | sed -e 's/\./-/g')"
 
@@ -420,7 +430,7 @@ function main {
             echo "https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/managing-users.html#ami-default-user-names"
             exit 1
         fi
-        user_data=$(create_linux_user_data $dd_version_linux $dd_api_key)
+        user_data=$(create_linux_user_data $dd_version_major $dd_version_minor $dd_api_key)
     elif [[ $ami_platform == windows ]]; then
         echo "Datadog Agent for windows will be installed"
         user_data=$(create_windows_user_data $dd_version)
