@@ -297,7 +297,7 @@ function get_secret_file {
     else
         secret_file=$secret_files
     fi
-    if [[ -z $secret_file ]] && [[ $commands[op] ]];then
+    if [[ -z $secret_file ]] && command -v op &> /dev/null;then
         secret_file=$(mktemp)
         item_title=$(op item list --vault="Private" --format=json | python3 -c "import sys, json; print('\n'.join([item['title'] for item in json.load(sys.stdin)]))" | fzf --height 30 --header "Select your 1Password item for ${ssh_key_name} ssh key pair")
         op item get "$item_title" --fields "RSA PRIVATE KEY" | sed -e 's/"//g' >$secret_file
@@ -315,33 +315,6 @@ function open_aws_console_page {
         open $aws_url
     fi
 }
-
-# function ssh_to_host {
-#     local username=$1
-#     local addr=$2
-#     local ssh_key_name=$3
-#     local secret=$(get_secret_file "$ssh_key_name")
-#     local ssh_cmd="ssh ${secret:+-i \"$secret\"} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null ${username}@${addr}"
-#     echo "Exec: $ssh_cmd" 1>&2
-#     local ssh_avail=""
-#     local max_attempts=40
-#     for ((i=1; i<=max_attempts; i++)); do
-#         ssh_avail=$(echo test | nc -G2 $addr 22 || true)
-#         # Show progress bar
-#         local percent=$((i * 100 / max_attempts))
-#         local bar_len=50
-#         local bar=$(printf '%*s' $((i*bar_len/max_attempts)) '' | tr ' ' '#')
-#         printf "\rWait for ssh availability: [%-${bar_len}s] %d%%" "$bar" "$percent" 1>&2
-#         if [[ -n $ssh_avail ]]; then
-#             break
-#         fi
-#         sleep 1
-#     done
-#     sleep 3
-#     # Clear the progress bar by printing spaces and move cursor up
-#     printf "\r%-120s\r" 1>&2
-#     $ssh_cmd
-# }
 
 function ssh_to_host {
     local username=$1
@@ -377,6 +350,12 @@ function ssh_to_host {
 }
 
 function main {
+    # Install fzf command if not installed
+    if ! command -v fzf &> /dev/null ;then
+        echo "fzf command is required. Installing it."
+        brew update && brew install fzf
+    fi
+    
     # Global variables
     ## AWS region
     REGION=${REGION:-"ap-northeast-1"}
