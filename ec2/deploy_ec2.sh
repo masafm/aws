@@ -253,8 +253,8 @@ function get_ssh_key {
             echo $(echo -e "$default_name\n$items" | fzf --height 30 --header "Select your SSH key name")
         else
             echo $(echo -e "$items" | fzf --height 30 --header "Select your SSH key name")
+        fi
     fi
-fi
 }
 
 function get_vpc_id {
