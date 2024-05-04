@@ -52,6 +52,41 @@ function select_region() {
     echo $selected_region
 }
 
+function fetch_public_subnet_security_group_ids() {
+    local region="${REGION}"
+
+    # Get the default VPC ID
+    local default_vpc_id=$(aws ec2 describe-vpcs --region "$region" --filters "Name=is-default,Values=true" --query "Vpcs[0].VpcId" --output text 2>&1)
+    echo "Default VPC ID: $default_vpc_id" >&2
+
+    # Validate if default VPC ID was found
+    if [[ $default_vpc_id == "None" || -z $default_vpc_id ]]; then
+        echo "No default VPC found." >&2
+        return 1
+    fi
+
+    # Find subnets in the default VPC where Auto-assign public IPv4 is enabled
+    local subnet_ids=($(aws ec2 describe-subnets --region "$region" --filters "Name=vpc-id,Values=$default_vpc_id" "Name=map-public-ip-on-launch,Values=true" --query "Subnets[*].SubnetId" --output text 2>&1))
+
+    # Check if any subnet IDs were found
+    if [[ ${#subnet_ids[@]} -eq 0 ]]; then
+        echo "No subnets with auto-assign public IPv4 found in the default VPC." >&2
+        return 1
+    fi
+
+    echo "Subnet IDs with auto-assign public IPv4: ${subnet_ids[*]}" >&2
+
+    # Shuffle subnet IDs and process each one
+    local shuffled_ids=($(shuf -e "${subnet_ids[@]}"))
+    for subnet_id in "${shuffled_ids[@]}"; do
+        local is_public=$(aws ec2 describe-subnets --region "$region" --subnet-ids "$subnet_id" --query 'Subnets[].MapPublicIpOnLaunch' --output text 2>&1)
+        if [[ "${is_public,,}" == "true" ]]; then
+            echo "$subnet_id"
+            break
+        fi
+    done
+}
+
 function search_amis() {
     local preferred_ami_id="$1"
     local ami_info=""
@@ -62,11 +97,11 @@ function search_amis() {
     local temp_dir=$(mktemp -d)
     
     # Get the AWS account ID of the current user
-    local owner_id=$(aws sts get-caller-identity --query "Account" --output text)
+    local owner_id=$(aws --region ${REGION} sts get-caller-identity --query "Account" --output text)
 
     # Check if a preferred AMI ID is provided and valid
     if [[ -n "$preferred_ami_id" ]]; then
-        ami_info=$(aws ec2 describe-images --image-ids "$preferred_ami_id" --query "Images[*].[ImageId,Name,Description]" --output text)
+        ami_info=$(aws --region ${REGION} ec2 describe-images --image-ids "$preferred_ami_id" --query "Images[*].[ImageId,Name,Description]" --output text)
         if [[ -n "$ami_info" ]]; then
             echo "Fetching details for preferred AMI ID: $preferred_ami_id..." >&2
             # Prepend preferred AMI info
@@ -88,13 +123,13 @@ function search_amis() {
         filter="${os_filters[$os]}"
         temp_file="$temp_dir/$os"
         echo "Fetching AMI information for $os..." >&2
-        (aws ec2 describe-images --filters $filter --query "Images[*].[ImageId,Name,Description]" --output text > "$temp_file") &
+        (aws --region ${REGION} ec2 describe-images --filters $filter --query "Images[*].[ImageId,Name,Description]" --output text > "$temp_file") &
     done
 
     # Fetch user-defined AMIs
     temp_file="$temp_dir/user_defined_amis"
     echo "Fetching user-defined AMIs..." >&2
-    (aws ec2 describe-images --owners "$owner_id" --query "Images[*].[ImageId,Name,Description]" --output text > "$temp_file") &
+    (aws --region ${REGION} ec2 describe-images --owners "$owner_id" --query "Images[*].[ImageId,Name,Description]" --output text > "$temp_file") &
 
     # Wait for all background processes to complete
     wait
@@ -240,9 +275,9 @@ function ensure_security_group {
     
     # Update rules: Ensure SSH, RDP and ICMP are allowed (idempotent operations)
     echo "Updating security group rules..." >&2
-    aws --region ${REGION} ec2 authorize-security-group-ingress --group-id $sg_id --protocol tcp --port 22 --cidr ${my_ip}/32 --output text
-    aws --region ${REGION} ec2 authorize-security-group-ingress --group-id $sg_id --protocol tcp --port 3389 --cidr ${my_ip}/32 --output text
-    aws --region ${REGION} ec2 authorize-security-group-ingress --group-id $sg_id --protocol icmp --port -1 --cidr ${my_ip}/32 --output text
+    aws --region ${REGION} ec2 authorize-security-group-ingress --group-id $sg_id --protocol tcp --port 22 --cidr ${my_ip}/32 --output text >/dev/null
+    aws --region ${REGION} ec2 authorize-security-group-ingress --group-id $sg_id --protocol tcp --port 3389 --cidr ${my_ip}/32 --output text >/dev/null
+    aws --region ${REGION} ec2 authorize-security-group-ingress --group-id $sg_id --protocol icmp --port -1 --cidr ${my_ip}/32 --output text >/dev/null
 
     echo $sg_id
 }
@@ -373,13 +408,14 @@ function deploy_ec2_instance {
     local volume_dev_name=$(aws ec2 describe-images --image-ids $AMI_ID --region $REGION --query 'Images[0].BlockDeviceMappings[0].DeviceName' --output text)
     # Get root volume size
     local volume_dev_size=$(aws ec2 describe-images --image-ids $AMI_ID --region $REGION --query 'Images[0].BlockDeviceMappings[0].Ebs.VolumeSize' --output text)
+    local update_volume=""
     if [[ $VOLUME_SIZE -gt $volume_dev_size ]];then
-        local update_volume=--block-device-mappings "DeviceName=${volume_dev_name},Ebs={VolumeSize=${VOLUME_SIZE},VolumeType=gp3,DeleteOnTermination=true}"
+        update_volume="--block-device-mappings [{\"DeviceName\":\"$volume_dev_name\",\"Ebs\":{\"VolumeSize\":$VOLUME_SIZE,\"VolumeType\":\"gp3\",\"DeleteOnTermination\":true}}]"
     fi
     # Deploy instance from AMI
     local instance_id=$(aws --region ${REGION} ec2 run-instances --image-id $AMI_ID --instance-type ${INSTANCE_TYPE} --security-group-ids $sg_id --subnet-id $SUBNET_ID --key-name "$ssh_key_name" --count 1 ${update_volume} --query 'Instances[0].InstanceId' --output text --user-data "$user_data")
     # Set Name tag of instance
-    aws --region ${REGION} ec2 create-tags --resources $instance_id --tags Key=Name,Value=$instance_name
+    aws --region ${REGION} ec2 create-tags --resources $instance_id --tags Key=Name,Value="$instance_name"
     echo $instance_id
 }
 
@@ -494,6 +530,18 @@ function is_tcp_port_available {
     printf "\r%-120s\r" 1>&2
 }
 
+function get_instance_name {
+    local default_instance_name=$1
+    echo -n "Enter instance name [${default_instance_name}]: " 1>&2
+    local name
+    read name
+    if [[ -z $name ]];then
+        echo $default_instance_name
+    else
+        echo $name | sed -e 's/[&;|*^<>$?!\\'\'\"'"]//g'
+    fi
+}
+
 function main {
     # Install fzf command if not installed
     if ! command -v fzf &> /dev/null ;then
@@ -511,13 +559,13 @@ function main {
     ## AWS region
     REGION=${REGION:-$(select_region)}
     ## Amazon machine image ID
-    AMI_ID=$(search_amis "$AMI_ID")
+    AMI_ID=${AMI_ID:-$(search_amis "$AMI_ID")}
     ## Volume size of root volume
     VOLUME_SIZE=${VOLUME_SIZE:-"100"}
     ## Instance Type
     INSTANCE_TYPE=${INSTANCE_TYPE:-"c5.xlarge"}
     ## Subnet ID
-    SUBNET_ID=${SUBNET_ID:-"subnet-8a85c0a2"}
+    SUBNET_ID=${SUBNET_ID:-$(fetch_public_subnet_security_group_ids)}
     ## Security group ID
     SG_ID=${SG_ID:-""}
     ## Name of AWS ssh key pair
@@ -537,7 +585,7 @@ function main {
     local ssh_key_name=$(get_ssh_key)
     local timestamp=$(date +%Y%m%d-%H%M%S)
     # Set the instance name based on the username
-    local instance_name="${user_name}-${ami_platform}-${timestamp}"
+    local instance_name=$(get_instance_name "${user_name}-${ami_platform}-${timestamp}")
 
     local sg_id
     if [[ -n $SG_ID ]];then
@@ -553,7 +601,7 @@ function main {
     local dd_version_minor=$(echo $dd_version | sed -e 's/[0-9]*\.//')
     local dd_version_major=$(echo $dd_version | sed -e 's/\.[0-9.]*//')
     local dd_api_key=$(get_dd_api_key)
-    local hostname="$(echo $instance_name | sed -e 's/\./-/g')"
+    local hostname="$(echo "$instance_name" | sed -e 's/\./-/g')"
 
     # Create uesr data script
     local user_data
