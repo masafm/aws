@@ -2,6 +2,25 @@
 set -e         # Stop script when error happened
 set -o nounset # Don't accept undefined variables
 
+function show_fzf {
+    title=$1;shift
+    
+    # Expected maximum height
+    local max_height=30
+    
+    # Save standard input to a variable and count the number of lines
+    local input=$(cat)
+    local line_count=$(echo "$input" | wc -l)
+    
+    # Calculate the actual height (the smaller of max_height or line_count)
+    local actual_height=$(( line_count < max_height ? line_count : max_height ))
+    # Add number of fzf header and footer
+    actual_height=$(( actual_height + 3 ))
+    
+    # Execute fzf with the calculated height
+    echo "$input" | fzf --height $actual_height --header "$title"
+}
+
 function select_region {
     # Try to get the default region from AWS CLI configuration
     local default_region=$(aws configure get region 2>/dev/null)
@@ -56,7 +75,7 @@ function select_region {
     done <<< "$regions"
 
     # Use fzf to select a region, placing the default region at the top if it exists
-    local selected_region=$(echo -e "$default_region_info$region_info" | fzf --height 20 --header "Select AWS Region" | awk '{print $1}')
+    local selected_region=$(echo -e "$default_region_info$region_info" | show_fzf "Select AWS Region" | awk '{print $1}')
     echo $selected_region
 }
 
@@ -149,7 +168,7 @@ function search_amis {
     done
 
     # Display the AMIs in fzf, with the preferred AMI (if any) at the top
-    cat "$temp_dir/all_amis" | awk -F '\t' '{printf "%-20s %-50s %-80s\n", $1, $2, $3}' | fzf --height 50 --header "Select an AMI" | cut -f1 -d' '
+    cat "$temp_dir/all_amis" | awk -F '\t' '{printf "%-20s %-50s %-80s\n", $1, $2, $3}' | show_fzf "Select an AMI" | cut -f1 -d' '
 
     # Clean up
     rm -r "$temp_dir"
@@ -249,9 +268,9 @@ function get_ssh_key {
         local default_name_exist=$(echo "$items" | grep "^$default_name$" || true)
         if [[ -n $default_name_exist ]]; then
             items=$(echo "$items" | grep -v "^$default_name$" | sort)
-            echo $(echo -e "$default_name\n$items" | fzf --height 30 --header "Select your SSH key name")
+            echo $(echo -e "$default_name\n$items" | show_fzf "Select your SSH key name")
         else
-            echo $(echo -e "$items" | fzf --height 30 --header "Select your SSH key name")
+            echo $(echo -e "$items" | show_fzf "Select your SSH key name")
         fi
     fi
 }
@@ -331,10 +350,10 @@ function get_dd_version {
             echo $DD_VERSION
         else
             echo "Invalid Datadog Agent version: $DD_VERSION" 1>&2
-            echo $(echo "$dd_versions" | fzf --height 30 --header "${DD_VERSION} specified is invalid. Select Datadog Agent version")
+            echo $(echo "$dd_versions" | show_fzf "${DD_VERSION} specified is invalid. Select Datadog Agent version")
         fi
     else
-        echo $(echo "$dd_versions" | fzf --height 30 --header "Select Datadog Agent version")
+        echo $(echo "$dd_versions" | show_fzf "Select Datadog Agent version")
     fi
 }
 
@@ -552,7 +571,7 @@ function get_secret_local_file {
     # Check for locally saved pem files
     secret_files=$(find ~ -maxdepth 3 -type f -name "${ssh_key_name}.pem")
     if [[ $(wc -l <<<$secret_files) -gt 1 ]];then
-        secret_file=$(fzf --height 10 --header "Select your pem file for ${ssh_key_name}" <<<$secret_files)
+        secret_file=$(show_fzf "Select your pem file for ${ssh_key_name}" <<<$secret_files)
     else
         secret_file=$secret_files
     fi
@@ -568,7 +587,7 @@ function get_secret_1password {
         if [[ -n $(echo $LANG | grep -i ja_JP) ]];then
             keys=("秘密鍵" "${keys[@]}")
         fi
-        item_title=$(op item list --vault="Private" --format=json | python3 -c "import sys, json; print('\n'.join([item['title'] for item in json.load(sys.stdin)]))" | fzf --height 30 --header "Select your 1Password item for ${ssh_key_name} ssh key pair")
+        item_title=$(op item list --vault="Private" --format=json | python3 -c "import sys, json; print('\n'.join([item['title'] for item in json.load(sys.stdin)]))" | show_fzf "Select your 1Password item for ${ssh_key_name} ssh key pair")
         for i in "${keys[@]}"; do
             op item get "$item_title" --fields "${i}" | sed -e 's/"//g' -e 's/BEGIN PRIVATE KEY/BEGIN RSA PRIVATE KEY/' -e 's/END PRIVATE KEY/END RSA PRIVATE KEY/' >$secret_file
             if [[ -n $(cat $secret_file) ]];then
