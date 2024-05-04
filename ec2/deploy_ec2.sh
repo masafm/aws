@@ -27,13 +27,21 @@ function select_region() {
         case $region_name in
             ap-northeast-1) description="Tokyo" ;;
             ap-northeast-2) description="Seoul" ;;
+            ap-northeast-3) description="Osaka" ;;
             ap-southeast-1) description="Singapore" ;;
             ap-southeast-2) description="Sydney" ;;
-            ap-northeast-3) description="Osaka" ;;
-            us-east-1) description="N. Virginia" ;;
-            us-west-1) description="N. California" ;;
+            ap-south-1) description="Mumbai" ;;
+            eu-north-1) description="Stockholm" ;;
             eu-west-1) description="Ireland" ;;
+            eu-west-2) description="London" ;;
+            eu-west-3) description="Paris" ;;
             eu-central-1) description="Frankfurt" ;;
+            us-east-1) description="N. Virginia" ;;
+            us-east-2) description="Ohio" ;;
+            us-west-1) description="N. California" ;;
+            us-west-2) description="Oregon" ;;
+            ca-central-1) description="Central Canada" ;;
+            sa-east-1) description="São Paulo" ;;
             *)
                 description="Other region"
                 ;;
@@ -52,7 +60,7 @@ function select_region() {
     echo $selected_region
 }
 
-function fetch_public_subnet_security_group_ids() {
+function fetch_public_subnet_ids() {
     local region="${REGION}"
 
     # Get the default VPC ID
@@ -109,15 +117,17 @@ function search_amis() {
         fi
     fi
 
-    declare -A os_filters=(
-        ["Ubuntu"]="Name=owner-id,Values=099720109477 Name=name,Values=ubuntu/images/hvm-ssd/ubuntu-*-amd64-server-* Name=architecture,Values=x86_64"
-        ["RHEL"]="Name=owner-id,Values=309956199498 Name=name,Values=RHEL-* Name=architecture,Values=x86_64"
-        ["AmazonLinux"]="Name=owner-id,Values=137112412989 Name=name,Values=amzn2-ami-hvm-2.0.*-gp2 Name=architecture,Values=x86_64"
-        ["Windows"]="Name=owner-id,Values=801119661308 Name=name,Values=Windows_Server-*-*-Full-Base-* Name=architecture,Values=x86_64"
-        ["SUSE"]="Name=owner-id,Values=013907871322 Name=name,Values=suse-sles-15-sp1-v*-hvm-ssd-x86_64 Name=architecture,Values=x86_64"
-        ["Debian"]="Name=owner-id,Values=379101102735 Name=name,Values=debian-10-amd64-hvm-* Name=architecture,Values=x86_64"
-    )
-
+    # Retrieve owner IDs and save them in an array
+    echo "Fetching AMI owner ids of Amazon..." >&2
+    local owners=$(aws --region ${REGION} ec2 describe-images --owners amazon --filters Name=is-public,Values=true --query 'Images[].OwnerId' --output text | tr '\t' '\n' | sort | uniq)
+    
+    echo "Fetching AMI information from Amazon..." >&2
+    # Fetch AMI information for each owner ID
+    for owner in $owners; do
+        temp_file="$temp_dir/$owner"
+        (aws --region ${REGION} ec2 describe-images --filters Name=owner-id,Values=${owner} Name=architecture,Values=x86_64 --query "Images[*].[ImageId,Name,Description]" --output text > "$temp_file") &
+    done
+    
     # Fetch official AMIs in background
     for os in "${!os_filters[@]}"; do
         filter="${os_filters[$os]}"
@@ -145,7 +155,6 @@ function search_amis() {
     # Clean up
     rm -r "$temp_dir"
 }
-
 
 function create_rdp_file {
     local rdp_addr=$1
@@ -433,7 +442,7 @@ function get_windows_password {
     local instance_id=$1
     local secret_file=$2
     local password=""
-    local max_attempts=80
+    local max_attempts=100
     echo "Password generation for windows takes up to 4 minutes. Please be patient." 1>&2
     for ((i=1; i<=max_attempts; i++)); do
         local password=$(aws ec2 get-password-data --instance-id "${instance_id}" --priv-launch-key "$secret_file" --query 'PasswordData' --output text)
@@ -441,7 +450,7 @@ function get_windows_password {
         local percent=$((i * 100 / max_attempts))
         local bar_len=50
         local bar=$(printf '%*s' $((i*bar_len/max_attempts)) '' | tr ' ' '#')
-        printf "\rWait for password generation: [%-${bar_len}s] %d%%" "$bar" "$percent" 1>&2
+        printf "\rWaiting for password generation: [%-${bar_len}s] %d%%" "$bar" "$percent" 1>&2
         if [[ -n $password ]]; then
             break
         fi
@@ -516,7 +525,7 @@ function is_tcp_port_available {
             local percent=$((i * 100 / max_attempts))
             local bar_len=50
             local bar=$(printf '%*s' $((i*bar_len/max_attempts)) '' | tr ' ' '#')
-            printf "\rWait for TCP port $tcp_port availability: [%-${bar_len}s] %d%%" "$bar" "$percent" 1>&2
+            printf "\rWaiting for TCP port $tcp_port availability: [%-${bar_len}s] %d%%" "$bar" "$percent" 1>&2
             if [[ -n $port_avail ]]; then
                 echo $addr
                 break
@@ -567,7 +576,7 @@ function main {
     ## Instance Type
     INSTANCE_TYPE=${INSTANCE_TYPE:-"c5.xlarge"}
     ## Subnet ID
-    SUBNET_ID=${SUBNET_ID:-$(fetch_public_subnet_security_group_ids)}
+    SUBNET_ID=${SUBNET_ID:-$(fetch_public_subnet_ids)}
     ## Security group ID
     SG_ID=${SG_ID:-""}
     ## Name of AWS ssh key pair
