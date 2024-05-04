@@ -1,5 +1,5 @@
 #!/bin/bash
-set -e         # Stop script when error happened
+set -eu         # Stop script when error happened
 set -o nounset # Don't accept undefined variables
 
 function show_fzf {
