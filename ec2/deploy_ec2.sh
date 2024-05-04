@@ -6,7 +6,7 @@ function show_fzf {
     title=$1;shift
     
     # Expected maximum height
-    local max_height=30
+    local max_height=20
     
     # Save standard input to a variable and count the number of lines
     local input=$(cat)
@@ -612,7 +612,9 @@ function get_secret_file_path {
 
 function is_ssh_available {
     is_tcp_port_available 22 "$@"
-    sleep 10
+    local sleep_sec=15
+    echo "Waiting $sleep_sec more sec for user script run"
+    sleep $sleep_sec
 }
 
 function is_rdp_available {
