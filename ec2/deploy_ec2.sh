@@ -87,6 +87,7 @@ function fetch_public_subnet_ids() {
     for subnet_id in "${shuffled_ids[@]}"; do
         local is_public=$(aws ec2 describe-subnets --subnet-ids "$subnet_id" --query 'Subnets[].MapPublicIpOnLaunch' --output text 2>&1)
         if [[ "${is_public,,}" == "true" ]]; then
+            echo "Using subnet: $subnet_id" >&2
             echo "$subnet_id"
             break
         fi
@@ -148,7 +149,7 @@ function search_amis() {
     done
 
     # Display the AMIs in fzf, with the preferred AMI (if any) at the top
-    cat "$temp_dir/all_amis" | awk -F '\t' '{printf "%-20s %-50s %-80s\n", $1, $2, $3}' | fzf --header "Select an AMI" | cut -f1 -d' '
+    cat "$temp_dir/all_amis" | awk -F '\t' '{printf "%-20s %-50s %-80s\n", $1, $2, $3}' | fzf --height 50 --header "Select an AMI" | cut -f1 -d' '
 
     # Clean up
     rm -r "$temp_dir"
@@ -263,7 +264,7 @@ function get_vpc_id {
 function ensure_security_group {
     local subnet_id=$1
     local vpc_id=$(get_vpc_id $subnet_id)
-    local sg_name="${user_name}-${subnet_id}"
+    local sg_name="${user_name}-${vpc_id}"
     
     # Check if the security group already exists
     local sg_id=$(aws ec2 describe-security-groups \
@@ -282,9 +283,9 @@ function ensure_security_group {
     
     # Update rules: Ensure SSH, RDP and ICMP are allowed (idempotent operations)
     echo "Updating security group rules..." >&2
-    aws ec2 authorize-security-group-ingress --group-id $sg_id --protocol tcp --port 22 --cidr ${my_ip}/32 --output text >/dev/null
-    aws ec2 authorize-security-group-ingress --group-id $sg_id --protocol tcp --port 3389 --cidr ${my_ip}/32 --output text >/dev/null
-    aws ec2 authorize-security-group-ingress --group-id $sg_id --protocol icmp --port -1 --cidr ${my_ip}/32 --output text >/dev/null
+    aws ec2 authorize-security-group-ingress --group-id $sg_id --protocol tcp --port 22 --cidr ${my_ip}/32 --output text 2>&1 >/dev/null | grep -vi "already exists" | sed '/^$/d'
+    aws ec2 authorize-security-group-ingress --group-id $sg_id --protocol tcp --port 3389 --cidr ${my_ip}/32 --output text 2>&1 >/dev/null | grep -vi "already exists" | sed '/^$/d'
+    aws ec2 authorize-security-group-ingress --group-id $sg_id --protocol icmp --port -1 --cidr ${my_ip}/32 --output text 2>&1 >/dev/null | grep -vi "already exists" | sed '/^$/d'
 
     echo $sg_id
 }
@@ -362,6 +363,12 @@ function create_windows_user_data {
     local dd_version=$1
     cat <<EOF
 <powershell>
+# Create Initial setup running.txt on desktop
+\$desktopPath = [Environment]::GetFolderPath("Desktop")
+# Specify the full path for the new file
+\$filePath = Join-Path -Path \$desktopPath -ChildPath "Initial setup running.txt"
+New-Item -Path \$filePath -ItemType File
+
 # Make shortcut on desktop for checking launch logs
 # Target directory for the shortcut
 \$targetPath = "C:\\ProgramData\\Amazon\\EC2Launch\\log"
@@ -374,31 +381,19 @@ function create_windows_user_data {
 \$shortcut = \$shell.CreateShortcut(\$shortcutPath)
 \$shortcut.TargetPath = \$targetPath
 \$shortcut.Save()
-
 # Release the COM object
 [System.Runtime.InteropServices.Marshal]::ReleaseComObject(\$shell) | Out-Null
-
-# Add Datadog Agent/bin to PATH
-Write-Host "Start adding Datadog Agent/bin to PATH"
-\$newPath = "C:\Program Files\Datadog\Datadog Agent\bin"
-\$currentPath = [System.Environment]::GetEnvironmentVariable("PATH", "Machine")
-\$newPath = \$currentPath + ";" + \$newPath
-[System.Environment]::SetEnvironmentVariable("PATH", \$newPath, "Machine")
-Write-Host "End adding Datadog Agent/bin to PATH"
 
 # Install Datadog Agent
 Write-Host "Start installing Datadog Agent"
 ${dd_version:+"\$version = \"$dd_version\""}
-
 \$file = "datadog-agent-7-latest.amd64.msi"
 if (Test-Path \$file) {
     Remove-Item -Path \$file
 }
-
 if (\$version) {
     \$file = "ddagent-cli-\$version.msi"
 }
-
 if (-not (Test-Path \$file)) {
     Write-Host "Downloading \$file"
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
@@ -409,12 +404,34 @@ if (-not (Test-Path \$file)) {
 Start-Process -Wait msiexec -ArgumentList "/qn /log C:/\$file.\$now.log /i \$file DDAGENTUSER_NAME=.\\ddagentuser DDAGENTUSER_PASSWORD=${dd_agentuser_pass} SITE=${DD_SITE:-datadoghq.com} APIKEY=${dd_api_key}"
 Write-Host "Datadog Agent has been installed successfully."
 
+# Add Datadog Agent/bin to PATH
+Write-Host "Start adding Datadog Agent/bin to PATH"
+\$newPath = "C:\Program Files\Datadog\Datadog Agent\bin"
+\$currentPath = [System.Environment]::GetEnvironmentVariable("PATH", "Machine")
+\$newPath = \$currentPath + ";" + \$newPath
+[System.Environment]::SetEnvironmentVariable("PATH", \$newPath, "Machine")
+Write-Host "End adding Datadog Agent/bin to PATH"
+
+# Make shortcut on desktop for Datadog Agent conf and logs dir
+# Target directory for the shortcut
+\$targetPath = "C:\\ProgramData\\Datadog"
+# Location to save the shortcut (user's desktop)
+\$desktopPath = [Environment]::GetFolderPath("Desktop")
+\$shortcutPath = Join-Path -Path \$desktopPath -ChildPath "Datadog Agent conf.lnk"
+# Create a WScript.Shell object
+\$shell = New-Object -ComObject WScript.Shell
+# Create the shortcut
+\$shortcut = \$shell.CreateShortcut(\$shortcutPath)
+\$shortcut.TargetPath = \$targetPath
+\$shortcut.Save()
+# Release the COM object
+[System.Runtime.InteropServices.Marshal]::ReleaseComObject(\$shell) | Out-Null
+
 # Set the registry key to show file extensions in Windows Explorer
 Write-Host "Seting the registry key to show file extensions in Windows Explorer."
 \$registryPath = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced"
 \$registryKey = "HideFileExt"
 \$registryValue = 0  # Set to 0 to show extensions
-
 # Check if the registry key already exists
 if (Test-Path -Path \$registryPath) {
     # Set the value to show file extensions
@@ -424,7 +441,6 @@ if (Test-Path -Path \$registryPath) {
     Write-Host "The registry path does not exist. Check the path and try again."
 }
 Write-Host "Finished adding the registry key to show file extensions in Windows Explorer."
-
 # Restart Windows Explorer to apply the change
 Stop-Process -Name explorer -Force
 Start-Process explorer
@@ -433,20 +449,28 @@ Start-Process explorer
 Write-Host "Start installing Notepad++"
 # URL for the Notepad++ installer
 \$installerUrl = "https://github.com/notepad-plus-plus/notepad-plus-plus/releases/download/v8.6.5/npp.8.6.5.Installer.x64.exe"
-
 # Local path for downloading the installer
 \$localPath = "\$env:TEMP\npp_installer.exe"
-
 # Download the installer
 Invoke-WebRequest -Uri \$installerUrl -OutFile \$localPath
-
 # Execute the installer (silent installation)
 Start-Process -FilePath \$localPath -Args '/S' -NoNewWindow -Wait
-
 # Delete the installer file
 Remove-Item -Path \$localPath -Force
-
 Write-Host "Notepad++ has been installed successfully."
+
+# Create Initial setup finished.txt on desktop
+\$desktopPath = [Environment]::GetFolderPath("Desktop")
+# Specify the full path for the new file
+\$filePath = Join-Path -Path \$desktopPath -ChildPath "Initial setup finished.txt"
+New-Item -Path \$filePath -ItemType File
+
+# Delete Initial setup running.txt on desktop
+\$desktopPath = [Environment]::GetFolderPath("Desktop")
+# Specify the full path for the file to be deleted
+\$filePath = Join-Path -Path \$desktopPath -ChildPath "Initial setup running.txt"
+Remove-Item -Path \$filePath -Force
+
 Write-Host "User data script completed!"
 
 </powershell>
