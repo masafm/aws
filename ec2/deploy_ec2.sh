@@ -56,8 +56,11 @@ function search_amis() {
     local preferred_ami_id="$1"
     local ami_info=""
     local all_amis=""
-    local amis filter os
+    local amis filter os temp_file
 
+    # Create a temporary directory to store output files
+    local temp_dir=$(mktemp -d)
+    
     # Get the AWS account ID of the current user
     local owner_id=$(aws sts get-caller-identity --query "Account" --output text)
 
@@ -67,11 +70,11 @@ function search_amis() {
         if [[ -n "$ami_info" ]]; then
             echo "Fetching details for preferred AMI ID: $preferred_ami_id..." >&2
             # Prepend preferred AMI info
-            all_amis+="$ami_info\n"
+            echo "$ami_info" > "$temp_dir/preferred_ami"
         fi
     fi
 
-    local -A os_filters=(
+    declare -A os_filters=(
         ["Ubuntu"]="Name=owner-id,Values=099720109477 Name=name,Values=ubuntu/images/hvm-ssd/ubuntu-*-amd64-server-* Name=architecture,Values=x86_64"
         ["RHEL"]="Name=owner-id,Values=309956199498 Name=name,Values=RHEL-* Name=architecture,Values=x86_64"
         ["AmazonLinux"]="Name=owner-id,Values=137112412989 Name=name,Values=amzn2-ami-hvm-2.0.*-gp2 Name=architecture,Values=x86_64"
@@ -80,22 +83,34 @@ function search_amis() {
         ["Debian"]="Name=owner-id,Values=379101102735 Name=name,Values=debian-10-amd64-hvm-* Name=architecture,Values=x86_64"
     )
 
-    # Fetch official AMIs
+    # Fetch official AMIs in background
     for os in "${!os_filters[@]}"; do
         filter="${os_filters[$os]}"
+        temp_file="$temp_dir/$os"
         echo "Fetching AMI information for $os..." >&2
-        amis=$(aws ec2 describe-images --filters $filter --query "Images[*].[ImageId,Name,Description]" --output text)
-        all_amis+="$amis\n"
+        (aws ec2 describe-images --filters $filter --query "Images[*].[ImageId,Name,Description]" --output text > "$temp_file") &
     done
 
-    # Also fetch user-defined AMIs
+    # Fetch user-defined AMIs
+    temp_file="$temp_dir/user_defined_amis"
     echo "Fetching user-defined AMIs..." >&2
-    amis=$(aws ec2 describe-images --owners "$owner_id" --query "Images[*].[ImageId,Name,Description]" --output text)
-    all_amis+="$amis\n"
+    (aws ec2 describe-images --owners "$owner_id" --query "Images[*].[ImageId,Name,Description]" --output text > "$temp_file") &
+
+    # Wait for all background processes to complete
+    wait
+
+    # Merge all results
+    for file in $(ls "$temp_dir"); do
+        cat "$temp_dir/$file" >> "$temp_dir/all_amis"
+    done
 
     # Display the AMIs in fzf, with the preferred AMI (if any) at the top
-    printf "$all_amis" | awk -F '\t' '{printf "%-20s %-50s %-80s\n", $1, $2, $3}' | fzf --header "Select an AMI" | cut -f1 -d' '
+    cat "$temp_dir/all_amis" | awk -F '\t' '{printf "%-20s %-50s %-80s\n", $1, $2, $3}' | fzf --header "Select an AMI" | cut -f1 -d' '
+
+    # Clean up
+    rm -r "$temp_dir"
 }
+
 
 function create_rdp_file {
     local rdp_addr=$1
