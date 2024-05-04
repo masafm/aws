@@ -95,7 +95,7 @@ function fetch_public_subnet_ids() {
 }
 
 function search_amis() {
-    local preferred_ami_id="$1"
+    local preferred_ami_id="$1";shift
     local ami_info=""
     local all_amis=""
     local amis filter os temp_file
@@ -117,7 +117,7 @@ function search_amis() {
     fi
 
     # Retrieve owner IDs and save them in an array
-    echo "Fetching AMI owner ids of Amazon..." >&2
+    echo "Fetching AMI owner IDs of official Amazon images..." >&2
     local owners=$(aws ec2 describe-images --owners amazon --filters Name=is-public,Values=true --query 'Images[].OwnerId' --output text | tr '\t' '\n' | sort | uniq)
     
     echo "Fetching AMI information from Amazon..." >&2
@@ -156,9 +156,9 @@ function search_amis() {
 }
 
 function create_rdp_file {
-    local rdp_addr=$1
-    local rdp_user_name=$2
-    local rdp_file=$3
+    local rdp_addr=$1;shift
+    local rdp_user_name=$1;shift
+    local rdp_file=$1;shift
     cat <<EOF >"$rdp_file"
 smart sizing:i:1
 armpath:s:
@@ -257,12 +257,12 @@ function get_ssh_key {
 }
 
 function get_vpc_id {
-    local subnet_id=$1
+    local subnet_id=$1;shift
     echo $(aws ec2 describe-subnets --subnet-ids $subnet_id --query 'Subnets[*].VpcId' --output text)
 }
 
 function ensure_security_group {
-    local subnet_id=$1
+    local subnet_id=$1;shift
     local vpc_id=$(get_vpc_id $subnet_id)
     local sg_name="${user_name}-${vpc_id}"
     
@@ -291,7 +291,7 @@ function ensure_security_group {
 }
 
 function get_default_security_group {
-    local subnet_id=$1
+    local subnet_id=$1;shift
     local vpc_id=$(get_vpc_id $subnet_id)
     echo $(aws ec2 describe-security-groups --filters Name=vpc-id,Values=${vpc_id} Name=group-name,Values='default' --query 'SecurityGroups[0].GroupId' --output text)
 }
@@ -339,9 +339,9 @@ function get_dd_version {
 }
 
 function create_linux_user_data {
-    local dd_version_major=$1
-    local dd_version_minor="DD_AGENT_MINOR_VERSION=${2}"
-    local dd_api_key=$3
+    local dd_version_major=$1;shift
+    local dd_version_minor="DD_AGENT_MINOR_VERSION="$1;shift
+    local dd_api_key=$1;shift
     cat <<EOF
 #!/bin/bash -x
 echo "$default_user:Datadog/4u" | sudo chpasswd
@@ -357,10 +357,10 @@ EOF
 }
 
 function create_windows_user_data {
+    local dd_version=$1;shift
     # Generate random passowrd
     local dd_agentuser_pass="$(openssl rand -base64 12 | tr -cd '[:alnum:]' | cut -c -15)@"
     echo "DDAGENTUSER_PASSWORD is ${dd_agentuser_pass}"
-    local dd_version=$1
     cat <<EOF
 <powershell>
 # Create Initial setup running.txt on desktop
@@ -494,8 +494,9 @@ function get_dd_api_key {
 }
 
 function deploy_ec2_instance {
-    local ssh_key_name=$1
-    local sg_id=$2
+    local instance_name=$1;shift
+    local ssh_key_name=$1;shift
+    local sg_id=$1;shift
     # Get root volume device name
     local volume_dev_name=$(aws ec2 describe-images --image-ids $AMI_ID --query 'Images[0].BlockDeviceMappings[0].DeviceName' --output text)
     # Get root volume size
@@ -512,18 +513,18 @@ function deploy_ec2_instance {
 }
 
 function get_public_ip {
-    local instance_id=$1
+    local instance_id=$1;shift
     echo $(aws ec2 describe-instances --instance-ids "${instance_id}" --query 'Reservations[*].Instances[*].PublicIpAddress' --output text 2>/dev/null)
 }
 
 function get_private_ip {
-    local instance_id=$1
+    local instance_id=$1;shift
     echo $(aws ec2 describe-instances --instance-ids "${instance_id}" --query 'Reservations[*].Instances[*].PrivateIpAddress' --output text 2>/dev/null)
 }
 
 function get_windows_password {
-    local instance_id=$1
-    local secret_file=$2
+    local instance_id=$1;shift
+    local secret_file=$1;shift
     local password=""
     local max_attempts=100
     echo "Password generation for windows takes up to 4 minutes. Please be patient." 1>&2
@@ -546,7 +547,7 @@ function get_windows_password {
 }
 
 function get_secret_local_file {
-    local ssh_key_name=$1
+    local ssh_key_name=$1;shift
     local secret_file
     # Check for locally saved pem files
     secret_files=$(find ~ -maxdepth 3 -type f -name "${ssh_key_name}.pem")
@@ -559,7 +560,7 @@ function get_secret_local_file {
 }
 
 function get_secret_1password {
-    local ssh_key_name=$1
+    local ssh_key_name=$1;shift
     local secret_file
     if command -v op &> /dev/null;then
         secret_file=$(mktemp)
@@ -579,7 +580,7 @@ function get_secret_1password {
 }
 
 function get_secret_file_path {
-    local ssh_key_name=$1
+    local ssh_key_name=$1;shift
     local secret_file=$(get_secret_local_file "$ssh_key_name")
     if [[ -z $secret_file ]];then
         secret_file=$(get_secret_1password "$ssh_key_name")
@@ -596,9 +597,8 @@ function is_rdp_available {
 }
 
 function is_tcp_port_available {
-    local tcp_port=$1
-    shift
-    local addr_array=("$@")
+    local tcp_port=$1;shift
+    local addr_array=("$@");shift $#
     local port_avail=""
     local max_attempts=60
     for ((i=1; i<=max_attempts; i++)); do
@@ -625,7 +625,7 @@ function is_tcp_port_available {
 }
 
 function get_instance_name {
-    local default_instance_name=$1
+    local default_instance_name=$1;shift
     echo -n "Enter instance name [${default_instance_name}]: " 1>&2
     local name
     read name
@@ -719,12 +719,13 @@ function main {
     fi
 
     # Deploy Instance
-    local instance_id=$(deploy_ec2_instance "$ssh_key_name" "$sg_id")
+    local instance_id=$(deploy_ec2_instance "$instance_name" "$ssh_key_name" "$sg_id")
 
     # Output the instance information
     echo "---------------------------------"
     echo "Datadog Agent version: ${dd_version}"
     echo "Instance name: ${instance_name}"
+    echo "Instance Type: ${INSTANCE_TYPE}"
     echo "Instance ID: ${instance_id}"
     echo "VPC ID: $(get_vpc_id $SUBNET_ID)"
     echo "Subnet ID: ${SUBNET_ID}"
