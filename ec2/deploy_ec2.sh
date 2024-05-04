@@ -1,5 +1,101 @@
 #!/bin/bash
-set -e
+set -e         # Stop script when error happened
+set -o nounset # Don't accept undefined variables
+
+function select_region() {
+    # Try to get the default region from AWS CLI configuration
+    local default_region=$(aws configure get region 2>/dev/null)
+    
+    if [[ -z "$default_region" ]]; then
+        echo "No default region is configured." >&2
+    else
+        echo "Default region detected: $default_region" >&2
+    fi
+
+    # Get available regions dynamically using AWS CLI
+    local regions=$(aws ec2 describe-regions --query "Regions[?OptInStatus=='opt-in-not-required'].[RegionName,OptInStatus]" --output text)
+    echo "Fetching available AWS regions..." >&2
+
+    # Format fetched regions for display
+    local region_info=""
+    local default_region_info=""
+    while read -r line; do
+        local region_name=$(echo $line | awk '{print $1}')
+        local description=""
+
+        # Assign descriptions based on region names
+        case $region_name in
+            ap-northeast-1) description="Tokyo" ;;
+            ap-northeast-2) description="Seoul" ;;
+            ap-southeast-1) description="Singapore" ;;
+            ap-southeast-2) description="Sydney" ;;
+            ap-northeast-3) description="Osaka" ;;
+            us-east-1) description="N. Virginia" ;;
+            us-west-1) description="N. California" ;;
+            eu-west-1) description="Ireland" ;;
+            eu-central-1) description="Frankfurt" ;;
+            *)
+                description="Other region"
+                ;;
+        esac
+
+        # Append the default region to the top of the list if it exists
+        if [[ "$region_name" == "$default_region" ]]; then
+            default_region_info="$region_name ($description) - Default\n"
+        else
+            region_info+="$region_name ($description)\n"
+        fi
+    done <<< "$regions"
+
+    # Use fzf to select a region, placing the default region at the top if it exists
+    local selected_region=$(echo -e "$default_region_info$region_info" | fzf --height 20 --header "Select AWS Region" | awk '{print $1}')
+    echo $selected_region
+}
+
+function search_amis() {
+    local preferred_ami_id="$1"
+    local ami_info=""
+    local all_amis=""
+    local amis filter os
+
+    # Get the AWS account ID of the current user
+    local owner_id=$(aws sts get-caller-identity --query "Account" --output text)
+
+    # Check if a preferred AMI ID is provided and valid
+    if [[ -n "$preferred_ami_id" ]]; then
+        ami_info=$(aws ec2 describe-images --image-ids "$preferred_ami_id" --query "Images[*].[ImageId,Name,Description]" --output text)
+        if [[ -n "$ami_info" ]]; then
+            echo "Fetching details for preferred AMI ID: $preferred_ami_id..." >&2
+            # Prepend preferred AMI info
+            all_amis+="$ami_info\n"
+        fi
+    fi
+
+    local -A os_filters=(
+        ["Ubuntu"]="Name=owner-id,Values=099720109477 Name=name,Values=ubuntu/images/hvm-ssd/ubuntu-*-amd64-server-* Name=architecture,Values=x86_64"
+        ["RHEL"]="Name=owner-id,Values=309956199498 Name=name,Values=RHEL-* Name=architecture,Values=x86_64"
+        ["AmazonLinux"]="Name=owner-id,Values=137112412989 Name=name,Values=amzn2-ami-hvm-2.0.*-gp2 Name=architecture,Values=x86_64"
+        ["Windows"]="Name=owner-id,Values=801119661308 Name=name,Values=Windows_Server-*-*-Full-Base-* Name=architecture,Values=x86_64"
+        ["SUSE"]="Name=owner-id,Values=013907871322 Name=name,Values=suse-sles-15-sp1-v*-hvm-ssd-x86_64 Name=architecture,Values=x86_64"
+        ["Debian"]="Name=owner-id,Values=379101102735 Name=name,Values=debian-10-amd64-hvm-* Name=architecture,Values=x86_64"
+    )
+
+    # Fetch official AMIs
+    for os in "${!os_filters[@]}"; do
+        filter="${os_filters[$os]}"
+        echo "Fetching AMI information for $os..." >&2
+        amis=$(aws ec2 describe-images --filters $filter --query "Images[*].[ImageId,Name,Description]" --output text)
+        all_amis+="$amis\n"
+    done
+
+    # Also fetch user-defined AMIs
+    echo "Fetching user-defined AMIs..." >&2
+    amis=$(aws ec2 describe-images --owners "$owner_id" --query "Images[*].[ImageId,Name,Description]" --output text)
+    all_amis+="$amis\n"
+
+    # Display the AMIs in fzf, with the preferred AMI (if any) at the top
+    printf "$all_amis" | awk -F '\t' '{printf "%-20s %-50s %-80s\n", $1, $2, $3}' | fzf --header "Select an AMI" | cut -f1 -d' '
+}
 
 function create_rdp_file {
     local rdp_addr=$1
@@ -87,8 +183,8 @@ function get_current_aws_user {
 
 function get_ssh_key {
     # Get SSH key pair name
-    if [[ -n $SSH_KEY ]];then
-        echo $SSH_KEY
+    if [[ -n $SSH_KEY_PAIR_NAME ]];then
+        echo $SSH_KEY_PAIR_NAME
     else
         local default_name=$user_name
         local items=$(aws --region $REGION ec2 describe-key-pairs --query 'KeyPairs[*].KeyName' --output text | tr '\t' '\n' | sort -f)
@@ -107,17 +203,32 @@ function get_vpc_id {
     echo $(aws --region ${REGION} ec2 describe-subnets --subnet-ids $subnet_id --query 'Subnets[*].VpcId' --output text)
 }
 
-function create_security_group {
+function ensure_security_group {
     local subnet_id=$1
     local vpc_id=$(get_vpc_id $subnet_id)
-    # Create a security group
-    local sg_id=$(aws --region ${REGION} ec2 create-security-group --group-name "$instance_name" --description "Security group for SSH and RDP access" --query 'GroupId' --vpc-id "$vpc_id" --output text)
-    # Allow SSH access (port 22)
-    aws --region ${REGION} ec2 authorize-security-group-ingress --group-id $sg_id --protocol tcp --port 22 --cidr ${my_ip}/32 1>&2
-    # Allow RDP access (port 3389)
-    aws --region ${REGION} ec2 authorize-security-group-ingress --group-id $sg_id --protocol tcp --port 3389 --cidr ${my_ip}/32 1>&2
-    # Allow ICMP
-    aws --region ${REGION} ec2 authorize-security-group-ingress --group-id $sg_id --protocol icmp --port -1 --cidr ${my_ip}/32 1>&2
+    local sg_name="${user_name}-${subnet_id}"
+    
+    # Check if the security group already exists
+    local sg_id=$(aws --region ${REGION} ec2 describe-security-groups \
+                   --filters Name=vpc-id,Values="$vpc_id" Name=group-name,Values="$sg_name" \
+                   --query 'SecurityGroups[0].GroupId' --output text)
+    
+    # If security group does not exist, create it
+    if [[ $sg_id == "None" ]]; then
+        echo "Creating new security group..." >&2
+        sg_id=$(aws --region ${REGION} ec2 create-security-group \
+                      --group-name "$sg_name" --description "Security group for SSH and RDP access" \
+                      --vpc-id "$vpc_id" --query 'GroupId' --output text)
+    else
+        echo "Security group $sg_name already exists with ID $sg_id." >&2
+    fi
+    
+    # Update rules: Ensure SSH, RDP and ICMP are allowed (idempotent operations)
+    echo "Updating security group rules..." >&2
+    aws --region ${REGION} ec2 authorize-security-group-ingress --group-id $sg_id --protocol tcp --port 22 --cidr ${my_ip}/32 --output text
+    aws --region ${REGION} ec2 authorize-security-group-ingress --group-id $sg_id --protocol tcp --port 3389 --cidr ${my_ip}/32 --output text
+    aws --region ${REGION} ec2 authorize-security-group-ingress --group-id $sg_id --protocol icmp --port -1 --cidr ${my_ip}/32 --output text
+
     echo $sg_id
 }
 
@@ -251,7 +362,7 @@ function deploy_ec2_instance {
         local update_volume=--block-device-mappings "DeviceName=${volume_dev_name},Ebs={VolumeSize=${VOLUME_SIZE},VolumeType=gp3,DeleteOnTermination=true}"
     fi
     # Deploy instance from AMI
-    local instance_id=$(aws --region ${REGION} ec2 run-instances --image-id $AMI_ID --instance-type ${INSTANCE_TYPE} --security-group-ids $sg_id --subnet-id $subnet_id --key-name "$ssh_key_name" --count 1 ${update_volume} --query 'Instances[0].InstanceId' --output text --user-data "$user_data")
+    local instance_id=$(aws --region ${REGION} ec2 run-instances --image-id $AMI_ID --instance-type ${INSTANCE_TYPE} --security-group-ids $sg_id --subnet-id $SUBNET_ID --key-name "$ssh_key_name" --count 1 ${update_volume} --query 'Instances[0].InstanceId' --output text --user-data "$user_data")
     # Set Name tag of instance
     aws --region ${REGION} ec2 create-tags --resources $instance_id --tags Key=Name,Value=$instance_name
     echo $instance_id
@@ -374,16 +485,33 @@ function main {
         echo "fzf command is required. Installing it."
         brew update && brew install fzf
     fi
+
+    # Reading default env variables
+    if [ -f ~/.deploy_ec2.env ]; then
+        source ~/.deploy_ec2.env
+    fi
     
     # Global variables
+    set +o nounset # Accept undefined variables
     ## AWS region
-    REGION=${REGION:-"ap-northeast-1"}
+    REGION=${REGION:-$(select_region)}
     ## Amazon machine image ID
-    AMI_ID=${AMI_ID:-"ami-0485f90cce0eb4c17"}
+    AMI_ID=$(search_amis "$AMI_ID")
     ## Volume size of root volume
     VOLUME_SIZE=${VOLUME_SIZE:-"100"}
     ## Instance Type
     INSTANCE_TYPE=${INSTANCE_TYPE:-"c5.xlarge"}
+    ## Subnet ID
+    SUBNET_ID=${SUBNET_ID:-"subnet-8a85c0a2"}
+    ## Security group ID
+    SG_ID=${SG_ID:-""}
+    ## Name of AWS ssh key pair
+    SSH_KEY_PAIR_NAME=${SSH_KEY_PAIR_NAME:-""}
+    ## Datadog Agent version
+    DD_VERSION=${DD_VERSION:-""}
+    ## Create new security group or update existing new security group(default: true)
+    SG_CREATE=${SG_CREATE:-"true"}
+    set -o nounset # Don't accept undefined variables
     
     # Retrieve the username
     local user_name=$(get_current_aws_user)
@@ -396,27 +524,14 @@ function main {
     # Set the instance name based on the username
     local instance_name="${user_name}-${ami_platform}-${timestamp}"
 
-    local subnet_id
-    if [[ $user_name == masafumi.kashiwagi ]];then
-        subnet_id=${SUBNET_ID:-"subnet-099904a6ad96204d6"}
-    else
-        subnet_id=${SUBNET_ID:-"subnet-8a85c0a2"}
-    fi
-
-    # SG_CREATE default is false/no
-    if [[ -z $SG_CREATE ]] && [[ $user_name != masafumi.kashiwagi ]];then
-        echo -n "Create new security group? If not create, default security group will be used. [Y/n]: "
-        read SG_CREATE
-        SG_CREATE=${SG_CREATE:-"true"}
-    fi
     local sg_id
     if [[ -n $SG_ID ]];then
         sg_id=$SG_ID
     elif [[ "${SG_CREATE,,}" == "t"* ]] || [[ "${SG_CREATE,,}" == "y"* ]]; then
         # If user wanto to create a new security group
-        sg_id=$(create_security_group $subnet_id)
+        sg_id=$(ensure_security_group $SUBNET_ID)
     else
-        sg_id=$(get_default_security_group $subnet_id)
+        sg_id=$(get_default_security_group $SUBNET_ID)
     fi
 
     local dd_version=$(get_dd_version)
@@ -453,8 +568,8 @@ function main {
     echo "Datadog Agent version: ${dd_version}"
     echo "Instance name: ${instance_name}"
     echo "Instance ID: ${instance_id}"
-    echo "VPC ID: $(get_vpc_id $subnet_id)"
-    echo "Subnet ID: ${subnet_id}"
+    echo "VPC ID: $(get_vpc_id $SUBNET_ID)"
+    echo "Subnet ID: ${SUBNET_ID}"
     echo "Security Group ID: ${sg_id}"
     echo "AMI ID: ${AMI_ID}"
     echo "AMI Description: $(get_ami_description)"
