@@ -2,7 +2,7 @@
 set -e         # Stop script when error happened
 set -o nounset # Don't accept undefined variables
 
-function select_region() {
+function select_region {
     # Try to get the default region from AWS CLI configuration
     local default_region=$(aws configure get region 2>/dev/null)
     
@@ -60,7 +60,7 @@ function select_region() {
     echo $selected_region
 }
 
-function fetch_public_subnet_ids() {
+function fetch_public_subnet_ids {
     # Get the default VPC ID
     local default_vpc_id=$(aws ec2 describe-vpcs --filters "Name=is-default,Values=true" --query "Vpcs[0].VpcId" --output text 2>&1)
     echo "Default VPC ID: $default_vpc_id" >&2
@@ -94,7 +94,7 @@ function fetch_public_subnet_ids() {
     done
 }
 
-function search_amis() {
+function search_amis {
     local preferred_ami_id="$1";shift
     local ami_info=""
     local all_amis=""
