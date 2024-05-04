@@ -16,9 +16,12 @@ function show_fzf {
     local actual_height=$(( line_count < max_height ? line_count : max_height ))
     # Add number of fzf header and footer
     actual_height=$(( actual_height + 3 ))
-    
+
+    echo -e "\033[0;33m${title}\033[0m" >&2
     # Execute fzf with the calculated height
-    echo "$input" | fzf --height $actual_height --header "$title"
+    local selected_line=$(echo "$input" | fzf --height $actual_height --header "$title")
+    echo -e "$selected_line"
+    echo -e "  Choice: \033[0;32m$(sed -e 's/ .*//'<<<$selected_line)\033[0m" >&2
 }
 
 function select_region {
