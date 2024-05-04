@@ -612,6 +612,7 @@ function get_secret_file_path {
 
 function is_ssh_available {
     is_tcp_port_available 22 "$@"
+    sleep 10
 }
 
 function is_rdp_available {
@@ -640,7 +641,6 @@ function is_tcp_port_available {
         if [[ -n $port_avail ]]; then
             break
         fi
-        sleep 1
     done
     # Clear the progress bar by printing spaces and move cursor up
     printf "\r%-120s\r" 1>&2
