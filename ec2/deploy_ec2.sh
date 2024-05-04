@@ -433,7 +433,8 @@ function get_windows_password {
     local instance_id=$1
     local secret_file=$2
     local password=""
-    local max_attempts=40
+    local max_attempts=80
+    echo "Password generation for windows takes up to 4 minutes. Please be patient." 1>&2
     for ((i=1; i<=max_attempts; i++)); do
         local password=$(aws ec2 get-password-data --instance-id "${instance_id}" --priv-launch-key "$secret_file" --query 'PasswordData' --output text)
         # Show progress bar
@@ -507,7 +508,7 @@ function is_tcp_port_available {
     shift
     local addr_array=("$@")
     local port_avail=""
-    local max_attempts=40
+    local max_attempts=60
     for ((i=1; i<=max_attempts; i++)); do
         for addr in "${addr_array[@]}"; do
             port_avail=$(nc -z -G2 $addr $tcp_port 2>&1 | grep -i succeeded || true)
@@ -520,6 +521,7 @@ function is_tcp_port_available {
                 echo $addr
                 break
             fi
+            sleep 1
         done
         if [[ -n $port_avail ]]; then
             break
