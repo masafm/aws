@@ -61,10 +61,8 @@ function select_region() {
 }
 
 function fetch_public_subnet_ids() {
-    local region="${REGION}"
-
     # Get the default VPC ID
-    local default_vpc_id=$(aws ec2 describe-vpcs --region "$region" --filters "Name=is-default,Values=true" --query "Vpcs[0].VpcId" --output text 2>&1)
+    local default_vpc_id=$(aws ec2 describe-vpcs --filters "Name=is-default,Values=true" --query "Vpcs[0].VpcId" --output text 2>&1)
     echo "Default VPC ID: $default_vpc_id" >&2
 
     # Validate if default VPC ID was found
@@ -74,7 +72,7 @@ function fetch_public_subnet_ids() {
     fi
 
     # Find subnets in the default VPC where Auto-assign public IPv4 is enabled
-    local subnet_ids=($(aws ec2 describe-subnets --region "$region" --filters "Name=vpc-id,Values=$default_vpc_id" "Name=map-public-ip-on-launch,Values=true" --query "Subnets[*].SubnetId" --output text 2>&1))
+    local subnet_ids=($(aws ec2 describe-subnets --filters "Name=vpc-id,Values=$default_vpc_id" "Name=map-public-ip-on-launch,Values=true" --query "Subnets[*].SubnetId" --output text 2>&1))
 
     # Check if any subnet IDs were found
     if [[ ${#subnet_ids[@]} -eq 0 ]]; then
@@ -87,7 +85,7 @@ function fetch_public_subnet_ids() {
     # Shuffle subnet IDs and process each one
     local shuffled_ids=($(shuf -e "${subnet_ids[@]}"))
     for subnet_id in "${shuffled_ids[@]}"; do
-        local is_public=$(aws ec2 describe-subnets --region "$region" --subnet-ids "$subnet_id" --query 'Subnets[].MapPublicIpOnLaunch' --output text 2>&1)
+        local is_public=$(aws ec2 describe-subnets --subnet-ids "$subnet_id" --query 'Subnets[].MapPublicIpOnLaunch' --output text 2>&1)
         if [[ "${is_public,,}" == "true" ]]; then
             echo "$subnet_id"
             break
@@ -105,11 +103,11 @@ function search_amis() {
     local temp_dir=$(mktemp -d)
     
     # Get the AWS account ID of the current user
-    local owner_id=$(aws --region ${REGION} sts get-caller-identity --query "Account" --output text)
+    local owner_id=$(aws sts get-caller-identity --query "Account" --output text)
 
     # Check if a preferred AMI ID is provided and valid
     if [[ -n "$preferred_ami_id" ]]; then
-        ami_info=$(aws --region ${REGION} ec2 describe-images --image-ids "$preferred_ami_id" --query "Images[*].[ImageId,Name,Description]" --output text)
+        ami_info=$(aws ec2 describe-images --image-ids "$preferred_ami_id" --query "Images[*].[ImageId,Name,Description]" --output text)
         if [[ -n "$ami_info" ]]; then
             echo "Fetching details for preferred AMI ID: $preferred_ami_id..." >&2
             # Prepend preferred AMI info
@@ -119,13 +117,13 @@ function search_amis() {
 
     # Retrieve owner IDs and save them in an array
     echo "Fetching AMI owner ids of Amazon..." >&2
-    local owners=$(aws --region ${REGION} ec2 describe-images --owners amazon --filters Name=is-public,Values=true --query 'Images[].OwnerId' --output text | tr '\t' '\n' | sort | uniq)
+    local owners=$(aws ec2 describe-images --owners amazon --filters Name=is-public,Values=true --query 'Images[].OwnerId' --output text | tr '\t' '\n' | sort | uniq)
     
     echo "Fetching AMI information from Amazon..." >&2
     # Fetch AMI information for each owner ID
     for owner in $owners; do
         temp_file="$temp_dir/$owner"
-        (aws --region ${REGION} ec2 describe-images --filters Name=owner-id,Values=${owner} Name=architecture,Values=x86_64 --query "Images[*].[ImageId,Name,Description]" --output text > "$temp_file") &
+        (aws ec2 describe-images --filters Name=owner-id,Values=${owner} Name=architecture,Values=x86_64 --query "Images[*].[ImageId,Name,Description]" --output text > "$temp_file") &
     done
     
     # Fetch official AMIs in background
@@ -133,13 +131,13 @@ function search_amis() {
         filter="${os_filters[$os]}"
         temp_file="$temp_dir/$os"
         echo "Fetching AMI information for $os..." >&2
-        (aws --region ${REGION} ec2 describe-images --filters $filter --query "Images[*].[ImageId,Name,Description]" --output text > "$temp_file") &
+        (aws ec2 describe-images --filters $filter --query "Images[*].[ImageId,Name,Description]" --output text > "$temp_file") &
     done
 
     # Fetch user-defined AMIs
     temp_file="$temp_dir/user_defined_amis"
     echo "Fetching user-defined AMIs..." >&2
-    (aws --region ${REGION} ec2 describe-images --owners "$owner_id" --query "Images[*].[ImageId,Name,Description]" --output text > "$temp_file") &
+    (aws ec2 describe-images --owners "$owner_id" --query "Images[*].[ImageId,Name,Description]" --output text > "$temp_file") &
 
     # Wait for all background processes to complete
     wait
@@ -160,7 +158,7 @@ function create_rdp_file {
     local rdp_addr=$1
     local rdp_user_name=$2
     local rdp_file=$3
-    cat <<EOF >$rdp_file
+    cat <<EOF >"$rdp_file"
 smart sizing:i:1
 armpath:s:
 enablerdsaadauth:i:0
@@ -226,7 +224,7 @@ EOF
 
 # Determine the OS using the Platform attribute
 function determine_os_platform {
-    local ami_info=$(aws --region ${REGION} ec2 describe-images --image-ids "$AMI_ID" --output json)
+    local ami_info=$(aws ec2 describe-images --image-ids "$AMI_ID" --output json)
     if echo "$ami_info" | grep -iq 'windows'; then
         echo "windows"
     elif echo "$ami_info" | grep -iq 'linux'; then
@@ -237,7 +235,7 @@ fi
 }
 
 function get_current_aws_user {
-    aws --region ${REGION} sts get-caller-identity --query 'Arn' --output text | rev | cut -d/ -f1 | rev | sed -e 's/@.*//'
+    aws sts get-caller-identity --query 'Arn' --output text | rev | cut -d/ -f1 | rev | sed -e 's/@.*//'
 }
 
 function get_ssh_key {
@@ -246,7 +244,7 @@ function get_ssh_key {
         echo $SSH_KEY_PAIR_NAME
     else
         local default_name=$user_name
-        local items=$(aws --region $REGION ec2 describe-key-pairs --query 'KeyPairs[*].KeyName' --output text | tr '\t' '\n' | sort -f)
+        local items=$(aws ec2 describe-key-pairs --query 'KeyPairs[*].KeyName' --output text | tr '\t' '\n' | sort -f)
         local default_name_exist=$(echo "$items" | grep "^$default_name$" || true)
         if [[ -n $default_name_exist ]]; then
             items=$(echo "$items" | grep -v "^$default_name$" | sort)
@@ -259,7 +257,7 @@ function get_ssh_key {
 
 function get_vpc_id {
     local subnet_id=$1
-    echo $(aws --region ${REGION} ec2 describe-subnets --subnet-ids $subnet_id --query 'Subnets[*].VpcId' --output text)
+    echo $(aws ec2 describe-subnets --subnet-ids $subnet_id --query 'Subnets[*].VpcId' --output text)
 }
 
 function ensure_security_group {
@@ -268,14 +266,14 @@ function ensure_security_group {
     local sg_name="${user_name}-${subnet_id}"
     
     # Check if the security group already exists
-    local sg_id=$(aws --region ${REGION} ec2 describe-security-groups \
+    local sg_id=$(aws ec2 describe-security-groups \
                    --filters Name=vpc-id,Values="$vpc_id" Name=group-name,Values="$sg_name" \
                    --query 'SecurityGroups[0].GroupId' --output text)
     
     # If security group does not exist, create it
     if [[ $sg_id == "None" ]]; then
         echo "Creating new security group..." >&2
-        sg_id=$(aws --region ${REGION} ec2 create-security-group \
+        sg_id=$(aws ec2 create-security-group \
                       --group-name "$sg_name" --description "Security group for SSH and RDP access" \
                       --vpc-id "$vpc_id" --query 'GroupId' --output text)
     else
@@ -284,9 +282,9 @@ function ensure_security_group {
     
     # Update rules: Ensure SSH, RDP and ICMP are allowed (idempotent operations)
     echo "Updating security group rules..." >&2
-    aws --region ${REGION} ec2 authorize-security-group-ingress --group-id $sg_id --protocol tcp --port 22 --cidr ${my_ip}/32 --output text >/dev/null
-    aws --region ${REGION} ec2 authorize-security-group-ingress --group-id $sg_id --protocol tcp --port 3389 --cidr ${my_ip}/32 --output text >/dev/null
-    aws --region ${REGION} ec2 authorize-security-group-ingress --group-id $sg_id --protocol icmp --port -1 --cidr ${my_ip}/32 --output text >/dev/null
+    aws ec2 authorize-security-group-ingress --group-id $sg_id --protocol tcp --port 22 --cidr ${my_ip}/32 --output text >/dev/null
+    aws ec2 authorize-security-group-ingress --group-id $sg_id --protocol tcp --port 3389 --cidr ${my_ip}/32 --output text >/dev/null
+    aws ec2 authorize-security-group-ingress --group-id $sg_id --protocol icmp --port -1 --cidr ${my_ip}/32 --output text >/dev/null
 
     echo $sg_id
 }
@@ -294,15 +292,15 @@ function ensure_security_group {
 function get_default_security_group {
     local subnet_id=$1
     local vpc_id=$(get_vpc_id $subnet_id)
-    echo $(aws --region ${REGION} ec2 describe-security-groups --filters Name=vpc-id,Values=${vpc_id} Name=group-name,Values='default' --query 'SecurityGroups[0].GroupId' --output text)
+    echo $(aws ec2 describe-security-groups --filters Name=vpc-id,Values=${vpc_id} Name=group-name,Values='default' --query 'SecurityGroups[0].GroupId' --output text)
 }
 
 function get_ami_description {
-    echo $(aws ec2 describe-images --image-ids $AMI_ID --region $REGION --query 'Images[*].Description' --output text)
+    echo $(aws ec2 describe-images --image-ids $AMI_ID --query 'Images[*].Description' --output text)
 }
 
 function get_linux_default_user {
-    ami_info=$(aws ec2 describe-images --image-ids $AMI_ID --region $REGION --query 'Images[*].Description' --output text | tr '[:upper:]' '[:lower:]' | tr -d '[:punct:]' | tr -d '[:space:]')
+    ami_info=$(aws ec2 describe-images --image-ids $AMI_ID --query 'Images[*].Description' --output text | tr '[:upper:]' '[:lower:]' | tr -d '[:punct:]' | tr -d '[:space:]')
     if [[ $ami_info == *"amazonlinux"* ]]; then
         echo "ec2-user"
     elif [[ $ami_info == *"ubuntu"* ]]; then
@@ -364,13 +362,32 @@ function create_windows_user_data {
     local dd_version=$1
     cat <<EOF
 <powershell>
+# Make shortcut on desktop for checking launch logs
+# Target directory for the shortcut
+\$targetPath = "C:\\ProgramData\\Amazon\\EC2Launch\\log"
+# Location to save the shortcut (user's desktop)
+\$desktopPath = [Environment]::GetFolderPath("Desktop")
+\$shortcutPath = Join-Path -Path \$desktopPath -ChildPath "Launch Logs.lnk"
+# Create a WScript.Shell object
+\$shell = New-Object -ComObject WScript.Shell
+# Create the shortcut
+\$shortcut = \$shell.CreateShortcut(\$shortcutPath)
+\$shortcut.TargetPath = \$targetPath
+\$shortcut.Save()
+
+# Release the COM object
+[System.Runtime.InteropServices.Marshal]::ReleaseComObject(\$shell) | Out-Null
+
 # Add Datadog Agent/bin to PATH
+Write-Host "Start adding Datadog Agent/bin to PATH"
 \$newPath = "C:\Program Files\Datadog\Datadog Agent\bin"
 \$currentPath = [System.Environment]::GetEnvironmentVariable("PATH", "Machine")
 \$newPath = \$currentPath + ";" + \$newPath
 [System.Environment]::SetEnvironmentVariable("PATH", \$newPath, "Machine")
+Write-Host "End adding Datadog Agent/bin to PATH"
 
 # Install Datadog Agent
+Write-Host "Start installing Datadog Agent"
 ${dd_version:+"\$version = \"$dd_version\""}
 
 \$file = "datadog-agent-7-latest.amd64.msi"
@@ -390,6 +407,48 @@ if (-not (Test-Path \$file)) {
 }
 \$now = (Get-Date).ToString("yyyyMMddHHmmss")
 Start-Process -Wait msiexec -ArgumentList "/qn /log C:/\$file.\$now.log /i \$file DDAGENTUSER_NAME=.\\ddagentuser DDAGENTUSER_PASSWORD=${dd_agentuser_pass} SITE=${DD_SITE:-datadoghq.com} APIKEY=${dd_api_key}"
+Write-Host "Datadog Agent has been installed successfully."
+
+# Set the registry key to show file extensions in Windows Explorer
+Write-Host "Seting the registry key to show file extensions in Windows Explorer."
+\$registryPath = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced"
+\$registryKey = "HideFileExt"
+\$registryValue = 0  # Set to 0 to show extensions
+
+# Check if the registry key already exists
+if (Test-Path -Path \$registryPath) {
+    # Set the value to show file extensions
+    Set-ItemProperty -Path \$registryPath -Name \$registryKey -Value \$registryValue
+    Write-Host "File extensions will now be displayed in Windows Explorer."
+} else {
+    Write-Host "The registry path does not exist. Check the path and try again."
+}
+Write-Host "Finished adding the registry key to show file extensions in Windows Explorer."
+
+# Restart Windows Explorer to apply the change
+Stop-Process -Name explorer -Force
+Start-Process explorer
+
+# Install Notepad++
+Write-Host "Start installing Notepad++"
+# URL for the Notepad++ installer
+\$installerUrl = "https://github.com/notepad-plus-plus/notepad-plus-plus/releases/download/v8.6.5/npp.8.6.5.Installer.x64.exe"
+
+# Local path for downloading the installer
+\$localPath = "\$env:TEMP\npp_installer.exe"
+
+# Download the installer
+Invoke-WebRequest -Uri \$installerUrl -OutFile \$localPath
+
+# Execute the installer (silent installation)
+Start-Process -FilePath \$localPath -Args '/S' -NoNewWindow -Wait
+
+# Delete the installer file
+Remove-Item -Path \$localPath -Force
+
+Write-Host "Notepad++ has been installed successfully."
+Write-Host "User data script completed!"
+
 </powershell>
 EOF
 }
@@ -414,28 +473,28 @@ function deploy_ec2_instance {
     local ssh_key_name=$1
     local sg_id=$2
     # Get root volume device name
-    local volume_dev_name=$(aws ec2 describe-images --image-ids $AMI_ID --region $REGION --query 'Images[0].BlockDeviceMappings[0].DeviceName' --output text)
+    local volume_dev_name=$(aws ec2 describe-images --image-ids $AMI_ID --query 'Images[0].BlockDeviceMappings[0].DeviceName' --output text)
     # Get root volume size
-    local volume_dev_size=$(aws ec2 describe-images --image-ids $AMI_ID --region $REGION --query 'Images[0].BlockDeviceMappings[0].Ebs.VolumeSize' --output text)
+    local volume_dev_size=$(aws ec2 describe-images --image-ids $AMI_ID --query 'Images[0].BlockDeviceMappings[0].Ebs.VolumeSize' --output text)
     local update_volume=""
     if [[ $VOLUME_SIZE -gt $volume_dev_size ]];then
         update_volume="--block-device-mappings [{\"DeviceName\":\"$volume_dev_name\",\"Ebs\":{\"VolumeSize\":$VOLUME_SIZE,\"VolumeType\":\"gp3\",\"DeleteOnTermination\":true}}]"
     fi
     # Deploy instance from AMI
-    local instance_id=$(aws --region ${REGION} ec2 run-instances --image-id $AMI_ID --instance-type ${INSTANCE_TYPE} --security-group-ids $sg_id --subnet-id $SUBNET_ID --key-name "$ssh_key_name" --count 1 ${update_volume} --query 'Instances[0].InstanceId' --output text --user-data "$user_data")
+    local instance_id=$(aws ec2 run-instances --image-id $AMI_ID --instance-type ${INSTANCE_TYPE} --security-group-ids $sg_id --subnet-id $SUBNET_ID --key-name "$ssh_key_name" --count 1 ${update_volume} --query 'Instances[0].InstanceId' --output text --user-data "$user_data")
     # Set Name tag of instance
-    aws --region ${REGION} ec2 create-tags --resources $instance_id --tags Key=Name,Value="$instance_name"
+    aws ec2 create-tags --resources $instance_id --tags Key=Name,Value="$instance_name"
     echo $instance_id
 }
 
 function get_public_ip {
     local instance_id=$1
-    echo $(aws --region $REGION ec2 describe-instances --instance-ids "${instance_id}" --query 'Reservations[*].Instances[*].PublicIpAddress' --output text 2>/dev/null)
+    echo $(aws ec2 describe-instances --instance-ids "${instance_id}" --query 'Reservations[*].Instances[*].PublicIpAddress' --output text 2>/dev/null)
 }
 
 function get_private_ip {
     local instance_id=$1
-    echo $(aws --region $REGION ec2 describe-instances --instance-ids "${instance_id}" --query 'Reservations[*].Instances[*].PrivateIpAddress' --output text 2>/dev/null)
+    echo $(aws ec2 describe-instances --instance-ids "${instance_id}" --query 'Reservations[*].Instances[*].PrivateIpAddress' --output text 2>/dev/null)
 }
 
 function get_windows_password {
@@ -569,6 +628,7 @@ function main {
     set +o nounset # Accept undefined variables
     ## AWS region
     REGION=${REGION:-$(select_region)}
+    AWS_REGION=$REGION
     ## Amazon machine image ID
     AMI_ID=${AMI_ID:-$(search_amis "$AMI_ID")}
     ## Volume size of root volume
