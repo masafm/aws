@@ -347,7 +347,7 @@ function get_ami_description {
 }
 
 function get_linux_default_user {
-    ami_info=$(aws ec2 describe-images --image-ids $AMI_ID --query 'Images[*].Description' --output text | tr '[:upper:]' '[:lower:]' | tr -d '[:punct:]' | tr -d '[:space:]')
+    local ami_info=$(aws ec2 describe-images --image-ids $AMI_ID --query 'Images[*].Description' --output text | tr '[:upper:]' '[:lower:]' | tr -d '[:punct:]' | tr -d '[:space:]')
     if [[ $ami_info == *"amazonlinux"* ]]; then
         echo "ec2-user"
     elif [[ $ami_info == *"ubuntu"* ]]; then
@@ -772,7 +772,7 @@ hostname="$(echo "$instance_name" | sed -e 's/\./-/g')"
 if [[ $ami_platform != windows ]]; then
     echo "Datadog Agent for linux will be installed"
     # Check default user name for linux instance
-    default_user=$(get_linux_default_user $AMI_ID)
+    default_user=$(get_linux_default_user)
     if [[ -n $default_user ]];then
         echo "Default user for AMI $AMI_ID is likely: $default_user"
     else
