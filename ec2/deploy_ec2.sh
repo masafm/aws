@@ -1,8 +1,34 @@
 #!/bin/bash
-set -e         # Stop script when error happened
-set -o nounset # Don't accept undefined variables
+# Stop script when error and undefined variables used
+set -eu
 
-function select_region() {
+function show_fzf {
+    title=$1;shift
+    full_screen=$1;shift
+    
+    # Expected maximum height
+    local max_height=20
+    
+    # Save standard input to a variable and count the number of lines
+    local input=$(cat)
+    local line_count=$(echo "$input" | wc -l)
+    
+    # Calculate the actual height (the smaller of max_height or line_count)
+    local actual_height=$(( line_count < max_height ? line_count : max_height ))
+    # Add number of fzf header and footer
+    actual_height=$(( actual_height + 3 ))
+
+    echo -e "\033[0;33m${title}\033[0m" >&2
+    # Execute fzf with the calculated height
+    if [[ -z $full_screen ]] || [[ "${full_screen,,}" == "f"* ]] || [[ "${full_screen,,}" == "n"* ]];then
+        opt_height="--height $actual_height"
+    fi
+    local selected_line=$(echo "$input" | fzf $opt_height --header "$title")
+    echo -e "$selected_line"
+    echo -e "  Choice: \033[0;32m${selected_line}\033[0m" >&2
+}
+
+function select_region {
     # Try to get the default region from AWS CLI configuration
     local default_region=$(aws configure get region 2>/dev/null)
     
@@ -56,11 +82,11 @@ function select_region() {
     done <<< "$regions"
 
     # Use fzf to select a region, placing the default region at the top if it exists
-    local selected_region=$(echo -e "$default_region_info$region_info" | fzf --height 20 --header "Select AWS Region" | awk '{print $1}')
+    local selected_region=$(echo -e "$default_region_info$region_info" | show_fzf "Select AWS Region" "false" | awk '{print $1}')
     echo $selected_region
 }
 
-function fetch_public_subnet_ids() {
+function fetch_public_subnet_ids {
     # Get the default VPC ID
     local default_vpc_id=$(aws ec2 describe-vpcs --filters "Name=is-default,Values=true" --query "Vpcs[0].VpcId" --output text 2>&1)
     echo "Default VPC ID: $default_vpc_id" >&2
@@ -94,12 +120,33 @@ function fetch_public_subnet_ids() {
     done
 }
 
-function search_amis() {
-    local preferred_ami_id="$1"
+function is_cache_valid {
+    local cache_file=$1;shift
+    # Check if cache file exists
+    [[ -f "$cache_file" ]] || return 1  
+    # Get last modified time of the cache file
+    local last_modified=$(stat -c %Y "$cache_file")
+    # Get current time
+    local current_time=$(date +%s)
+    # Calculate elapsed time since last modified
+    local elapsed_time=$((current_time - last_modified))
+    # Set maximum age of cache
+    local max_age=${AMI_LIST_CACHE_EXPIRE}
+    # Return true if the elapsed time is less than the max age
+    [[ $elapsed_time -lt $max_age ]]
+}
+
+function search_amis {
+    local preferred_ami_id="$1";shift
     local ami_info=""
     local all_amis=""
-    local amis filter os temp_file
+    local temp_file
+    local cache_dir="$HOME/.cache/deploy_ec2/amis"
+    local cache_file="$cache_dir/amazon_amis-${REGION}"
 
+    # Creating cache dir
+    mkdir -p "$cache_dir"
+    
     # Create a temporary directory to store output files
     local temp_dir=$(mktemp -d)
     
@@ -116,49 +163,48 @@ function search_amis() {
         fi
     fi
 
-    # Retrieve owner IDs and save them in an array
-    echo "Fetching AMI owner ids of Amazon..." >&2
-    local owners=$(aws ec2 describe-images --owners amazon --filters Name=is-public,Values=true --query 'Images[].OwnerId' --output text | tr '\t' '\n' | sort | uniq)
-    
-    echo "Fetching AMI information from Amazon..." >&2
     # Fetch AMI information for each owner ID
-    for owner in $owners; do
-        temp_file="$temp_dir/$owner"
-        (aws ec2 describe-images --filters Name=owner-id,Values=${owner} Name=architecture,Values=x86_64 --query "Images[*].[ImageId,Name,Description]" --output text > "$temp_file") &
-    done
+    local amis_file_path
+    if is_cache_valid "$cache_file" && [[ "${NO_CACHE,,}" == "f"* || "${NO_CACHE,,}" == "n"* ]]; then
+        amis_file_path="$cache_file"
+        echo "Using cache file for Amazon AMI..." >&2        
+    else
+        amis_file_path="$temp_dir/amazon_amis"
+        echo "Fetching AMI information from Amazon..." >&2
+        temp_file="$temp_dir/amazon_amis"
+        (aws ec2 describe-images --owners amazon --filters Name=is-public,Values=true Name=architecture,Values=x86_64 --query "Images[*].[ImageId,Name,Description]" --output text > "$temp_file") &
+    fi
     
-    # Fetch official AMIs in background
-    for os in "${!os_filters[@]}"; do
-        filter="${os_filters[$os]}"
-        temp_file="$temp_dir/$os"
-        echo "Fetching AMI information for $os..." >&2
-        (aws ec2 describe-images --filters $filter --query "Images[*].[ImageId,Name,Description]" --output text > "$temp_file") &
-    done
-
     # Fetch user-defined AMIs
-    temp_file="$temp_dir/user_defined_amis"
-    echo "Fetching user-defined AMIs..." >&2
-    (aws ec2 describe-images --owners "$owner_id" --query "Images[*].[ImageId,Name,Description]" --output text > "$temp_file") &
-
+    touch "$temp_dir/user_defined_amis"
+    if [[ "${INCLUDE_USER_DEF_AMIS,,}" == "t"* ]] || [[ "${INCLUDE_USER_DEF_AMIS,,}" == "y"* ]]; then
+        temp_file="$temp_dir/user_defined_amis"
+        echo "Fetching user-defined AMIs..." >&2
+        (aws ec2 describe-images --owners "$owner_id" --query "Images[*].[ImageId,Name,Description]" --output text > "$temp_file") &
+    fi
+    
     # Wait for all background processes to complete
     wait
-
-    # Merge all results
-    for file in $(ls "$temp_dir"); do
-        cat "$temp_dir/$file" >> "$temp_dir/all_amis"
-    done
-
+    
+    # Check if "$temp_dir/amazon_amis" exists and has a size greater than zero
+    if [ -f "$temp_dir/amazon_amis" ] && [ -s "$temp_dir/amazon_amis" ]; then
+        echo "Chashing AMIs list from Amazon..." >&2
+        cp -f "$temp_dir/amazon_amis" "$cache_file"
+    else
+        echo "File does not exist or is empty. No action taken." >&2
+    fi
+    
     # Display the AMIs in fzf, with the preferred AMI (if any) at the top
-    cat "$temp_dir/all_amis" | awk -F '\t' '{printf "%-20s %-50s %-80s\n", $1, $2, $3}' | fzf --height 50 --header "Select an AMI" | cut -f1 -d' '
-
+    cat "$temp_dir/user_defined_amis" "$cache_file" | sort -k2 | awk -F '\t' '{printf "%-20s %-50s %-80s\n", $1, $2, $3}' | show_fzf "Select an AMI" "true" | cut -f1 -d' '
+    
     # Clean up
     rm -r "$temp_dir"
 }
 
 function create_rdp_file {
-    local rdp_addr=$1
-    local rdp_user_name=$2
-    local rdp_file=$3
+    local rdp_addr=$1;shift
+    local rdp_user_name=$1;shift
+    local rdp_file=$1;shift
     cat <<EOF >"$rdp_file"
 smart sizing:i:1
 armpath:s:
@@ -249,20 +295,20 @@ function get_ssh_key {
         local default_name_exist=$(echo "$items" | grep "^$default_name$" || true)
         if [[ -n $default_name_exist ]]; then
             items=$(echo "$items" | grep -v "^$default_name$" | sort)
-            echo $(echo -e "$default_name\n$items" | fzf --height 30 --header "Select your SSH key name")
+            echo $(echo -e "$default_name\n$items" | show_fzf "Select your SSH key name" "false")
         else
-            echo $(echo -e "$items" | fzf --height 30 --header "Select your SSH key name")
+            echo $(echo -e "$items" | show_fzf "Select your SSH key name" "false")
         fi
     fi
 }
 
 function get_vpc_id {
-    local subnet_id=$1
+    local subnet_id=$1;shift
     echo $(aws ec2 describe-subnets --subnet-ids $subnet_id --query 'Subnets[*].VpcId' --output text)
 }
 
 function ensure_security_group {
-    local subnet_id=$1
+    local subnet_id=$1;shift
     local vpc_id=$(get_vpc_id $subnet_id)
     local sg_name="${user_name}-${vpc_id}"
     
@@ -291,7 +337,7 @@ function ensure_security_group {
 }
 
 function get_default_security_group {
-    local subnet_id=$1
+    local subnet_id=$1;shift
     local vpc_id=$(get_vpc_id $subnet_id)
     echo $(aws ec2 describe-security-groups --filters Name=vpc-id,Values=${vpc_id} Name=group-name,Values='default' --query 'SecurityGroups[0].GroupId' --output text)
 }
@@ -325,26 +371,25 @@ function get_linux_default_user {
 
 function get_dd_version {
     local dd_versions=$(curl -L https://ddagent-windows-stable.s3.amazonaws.com/installers_v2.json 2>/dev/null | python3 -c "import sys, json, re; print('\n'.join([re.sub(r'-\d+$', '', key) for key in json.load(sys.stdin)['datadog-agent'].keys()]))" | sort -r | grep -e '^[6-7]\.')
-    if [[ -n $DD_VERSION ]];then
-        local dd_version_exists=$(echo "$dd_versions" | grep -e "^${DD_VERSION}\$" || true)
+    if [[ -n $VERSION_DATADOG ]];then
+        local dd_version_exists=$(echo "$dd_versions" | grep -e "^${VERSION_DATADOG}\$" || true)
         if [[ -n $dd_version_exists ]];then
-            echo $DD_VERSION
+            echo $VERSION_DATADOG
         else
-            echo "Invalid Datadog Agent version: $DD_VERSION" 1>&2
-            echo $(echo "$dd_versions" | fzf --height 30 --header "${DD_VERSION} specified is invalid. Select Datadog Agent version")
+            echo -e "\033[0;31mInvalid Datadog Agent version: $VERSION_DATADOG\033[0m" 1>&2
         fi
-    else
-        echo $(echo "$dd_versions" | fzf --height 30 --header "Select Datadog Agent version")
     fi
+    echo $(echo "$dd_versions" | show_fzf "Select Datadog Agent version" "false")
 }
 
 function create_linux_user_data {
-    local dd_version_major=$1
-    local dd_version_minor="DD_AGENT_MINOR_VERSION=${2}"
-    local dd_api_key=$3
+    local dd_version_major=$1;shift
+    local dd_version_minor="DD_AGENT_MINOR_VERSION="$1;shift
+    local dd_api_key=$1;shift
+    local password=$1;shift
     cat <<EOF
 #!/bin/bash -x
-echo "$default_user:Datadog/4u" | sudo chpasswd
+echo "$default_user:$password" | sudo chpasswd
 sudo sh -c "echo \"$hostname\" >/etc/hostname"
 sudo sh -c "hostname \"$hostname\""
 sudo sh -c "echo '---------------------------------------------------------------------------'>>/etc/motd"
@@ -356,11 +401,15 @@ DD_API_KEY=${dd_api_key} DD_SITE="${DD_SITE:-datadoghq.com}" ${dd_version_minor}
 EOF
 }
 
-function create_windows_user_data {
+function generate_random_password {
     # Generate random passowrd
-    local dd_agentuser_pass="$(openssl rand -base64 12 | tr -cd '[:alnum:]' | cut -c -15)@"
+    echo "$(openssl rand -base64 12 | tr -cd '[:alnum:]' | cut -c -31)@"
+}
+
+function create_windows_user_data {
+    local dd_version=$1;shift
+    local dd_agentuser_pass="$(generate_random_password)"
     echo "DDAGENTUSER_PASSWORD is ${dd_agentuser_pass}"
-    local dd_version=$1
     cat <<EOF
 <powershell>
 # Create Initial setup running.txt on desktop
@@ -494,8 +543,9 @@ function get_dd_api_key {
 }
 
 function deploy_ec2_instance {
-    local ssh_key_name=$1
-    local sg_id=$2
+    local instance_name=$1;shift
+    local ssh_key_name=$1;shift
+    local sg_id=$1;shift
     # Get root volume device name
     local volume_dev_name=$(aws ec2 describe-images --image-ids $AMI_ID --query 'Images[0].BlockDeviceMappings[0].DeviceName' --output text)
     # Get root volume size
@@ -512,18 +562,18 @@ function deploy_ec2_instance {
 }
 
 function get_public_ip {
-    local instance_id=$1
+    local instance_id=$1;shift
     echo $(aws ec2 describe-instances --instance-ids "${instance_id}" --query 'Reservations[*].Instances[*].PublicIpAddress' --output text 2>/dev/null)
 }
 
 function get_private_ip {
-    local instance_id=$1
+    local instance_id=$1;shift
     echo $(aws ec2 describe-instances --instance-ids "${instance_id}" --query 'Reservations[*].Instances[*].PrivateIpAddress' --output text 2>/dev/null)
 }
 
 function get_windows_password {
-    local instance_id=$1
-    local secret_file=$2
+    local instance_id=$1;shift
+    local secret_file=$1;shift
     local password=""
     local max_attempts=100
     echo "Password generation for windows takes up to 4 minutes. Please be patient." 1>&2
@@ -546,12 +596,12 @@ function get_windows_password {
 }
 
 function get_secret_local_file {
-    local ssh_key_name=$1
+    local ssh_key_name=$1;shift
     local secret_file
     # Check for locally saved pem files
     secret_files=$(find ~ -maxdepth 3 -type f -name "${ssh_key_name}.pem")
     if [[ $(wc -l <<<$secret_files) -gt 1 ]];then
-        secret_file=$(fzf --height 10 --header "Select your pem file for ${ssh_key_name}" <<<$secret_files)
+        secret_file=$(show_fzf "Select your pem file for ${ssh_key_name}" "false" <<<$secret_files)
     else
         secret_file=$secret_files
     fi
@@ -559,7 +609,7 @@ function get_secret_local_file {
 }
 
 function get_secret_1password {
-    local ssh_key_name=$1
+    local ssh_key_name=$1;shift
     local secret_file
     if command -v op &> /dev/null;then
         secret_file=$(mktemp)
@@ -567,7 +617,7 @@ function get_secret_1password {
         if [[ -n $(echo $LANG | grep -i ja_JP) ]];then
             keys=("秘密鍵" "${keys[@]}")
         fi
-        item_title=$(op item list --vault="Private" --format=json | python3 -c "import sys, json; print('\n'.join([item['title'] for item in json.load(sys.stdin)]))" | fzf --height 30 --header "Select your 1Password item for ${ssh_key_name} ssh key pair")
+        item_title=$(op item list --vault="Private" --format=json | python3 -c "import sys, json; print('\n'.join([item['title'] for item in json.load(sys.stdin)]))" | show_fzf "Select your 1Password item for ${ssh_key_name} ssh key pair" "false")
         for i in "${keys[@]}"; do
             op item get "$item_title" --fields "${i}" | sed -e 's/"//g' -e 's/BEGIN PRIVATE KEY/BEGIN RSA PRIVATE KEY/' -e 's/END PRIVATE KEY/END RSA PRIVATE KEY/' >$secret_file
             if [[ -n $(cat $secret_file) ]];then
@@ -579,7 +629,7 @@ function get_secret_1password {
 }
 
 function get_secret_file_path {
-    local ssh_key_name=$1
+    local ssh_key_name=$1;shift
     local secret_file=$(get_secret_local_file "$ssh_key_name")
     if [[ -z $secret_file ]];then
         secret_file=$(get_secret_1password "$ssh_key_name")
@@ -589,6 +639,9 @@ function get_secret_file_path {
 
 function is_ssh_available {
     is_tcp_port_available 22 "$@"
+    local sleep_sec=15
+    echo "Waiting $sleep_sec more sec for user script run" >&2
+    sleep $sleep_sec
 }
 
 function is_rdp_available {
@@ -596,9 +649,8 @@ function is_rdp_available {
 }
 
 function is_tcp_port_available {
-    local tcp_port=$1
-    shift
-    local addr_array=("$@")
+    local tcp_port=$1;shift
+    local addr_array=("$@");shift $#
     local port_avail=""
     local max_attempts=60
     for ((i=1; i<=max_attempts; i++)); do
@@ -618,14 +670,13 @@ function is_tcp_port_available {
         if [[ -n $port_avail ]]; then
             break
         fi
-        sleep 1
     done
     # Clear the progress bar by printing spaces and move cursor up
     printf "\r%-120s\r" 1>&2
 }
 
 function get_instance_name {
-    local default_instance_name=$1
+    local default_instance_name=$1;shift
     echo -n "Enter instance name [${default_instance_name}]: " 1>&2
     local name
     read name
@@ -636,142 +687,151 @@ function get_instance_name {
     fi
 }
 
-function main {
-    # Install fzf command if not installed
-    if ! command -v fzf &> /dev/null ;then
-        echo "fzf command is required. Installing it."
-        brew update && brew install fzf
-    fi
+# main function
+# Install fzf command if not installed
+if ! command -v fzf &> /dev/null ;then
+    echo "fzf command is required. Installing it."
+    brew update && brew install fzf
+fi
 
-    # Reading default env variables
-    if [ -f ~/.deploy_ec2.env ]; then
-        source ~/.deploy_ec2.env
-    fi
-    
-    # Global variables
-    set +o nounset # Accept undefined variables
-    ## AWS region
-    REGION=${REGION:-$(select_region)}
-    AWS_REGION=$REGION
-    ## Amazon machine image ID
-    AMI_ID=${AMI_ID:-$(search_amis "$AMI_ID")}
-    ## Volume size of root volume
-    VOLUME_SIZE=${VOLUME_SIZE:-"100"}
-    ## Instance Type
-    INSTANCE_TYPE=${INSTANCE_TYPE:-"c5.xlarge"}
-    ## Subnet ID
-    SUBNET_ID=${SUBNET_ID:-$(fetch_public_subnet_ids)}
-    ## Security group ID
-    SG_ID=${SG_ID:-""}
-    ## Name of AWS ssh key pair
-    SSH_KEY_PAIR_NAME=${SSH_KEY_PAIR_NAME:-""}
-    ## Datadog Agent version
-    DD_VERSION=${DD_VERSION:-""}
-    ## Create new security group or update existing new security group(default: true)
-    SG_CREATE=${SG_CREATE:-"true"}
-    set -o nounset # Don't accept undefined variables
-    
-    # Retrieve the username
-    local user_name=$(get_current_aws_user)
-    # Retrieve my public IP address
-    local my_ip=$(curl -s https://checkip.amazonaws.com)
-    local ami_platform=$(determine_os_platform $AMI_ID)
-    echo "The AMI ID $AMI_ID platform is ${ami_platform}."
-    local ssh_key_name=$(get_ssh_key)
-    local timestamp=$(date +%Y%m%d-%H%M%S)
-    # Set the instance name based on the username
-    local instance_name=$(get_instance_name "${user_name}-${ami_platform}-${timestamp}")
+# Reading default env variables
+if [ -f ~/.deploy_ec2.env ]; then
+    source ~/.deploy_ec2.env
+fi
 
-    local sg_id
-    if [[ -n $SG_ID ]];then
-        sg_id=$SG_ID
-    elif [[ "${SG_CREATE,,}" == "t"* ]] || [[ "${SG_CREATE,,}" == "y"* ]]; then
-        # If user wanto to create a new security group
-        sg_id=$(ensure_security_group $SUBNET_ID)
+# Global variables
+set +o nounset # Accept undefined variables
+## Disable any kind of caching
+NO_CACHE=${NO_CACHE:-"false"}
+## AWS region
+REGION=${REGION:-$(select_region)}
+AWS_REGION=$REGION
+## Amazon AMI cache list expire second
+AMI_LIST_CACHE_EXPIRE=${AMI_LIST_CACHE_EXPIRE:-$((24 * 3600 * 30))}
+## Amazon machine image ID
+AMI_ID=${AMI_ID:-$(search_amis)}
+## Volume size of root volume
+VOLUME_SIZE=${VOLUME_SIZE:-"100"}
+## Instance Type
+INSTANCE_TYPE=${INSTANCE_TYPE:-"c5.xlarge"}
+## Subnet ID
+SUBNET_ID=${SUBNET_ID:-$(fetch_public_subnet_ids)}
+## Security group ID
+SG_ID=${SG_ID:-""}
+## Name of AWS ssh key pair
+SSH_KEY_PAIR_NAME=${SSH_KEY_PAIR_NAME:-""}
+## Datadog Agent version
+VERSION_DATADOG=${VERSION_DATADOG:-""}
+## Create new security group or update existing new security group(default: true)
+SG_CREATE=${SG_CREATE:-"true"}
+## Include user-defined AMIs?
+INCLUDE_USER_DEF_AMIS=${INCLUDE_USER_DEF_AMIS:-"false"}
+## Password for linux will be Datadog/4u if this is ture/yes
+RANDOM_LINUX_PASSWORD=${NO_RANDOM_LINUX_PASSWORD:-"true"}
+set -o nounset # Don't accept undefined variables
+
+# Retrieve the username
+user_name=$(get_current_aws_user)
+# Retrieve my public IP address
+my_ip=$(curl -s https://checkip.amazonaws.com)
+ami_platform=$(determine_os_platform $AMI_ID)
+echo "The AMI ID $AMI_ID platform is ${ami_platform}."
+ssh_key_name=$(get_ssh_key)
+timestamp=$(date +%Y%m%d-%H%M%S)
+# Set the instance name based on the username
+instance_name=$(get_instance_name "${user_name}-${ami_platform}-${timestamp}")
+
+if [[ -n $SG_ID ]];then
+    sg_id=$SG_ID
+elif [[ "${SG_CREATE,,}" == "t"* ]] || [[ "${SG_CREATE,,}" == "y"* ]]; then
+    # If user wanto to create a new security group
+    sg_id=$(ensure_security_group $SUBNET_ID)
+else
+    sg_id=$(get_default_security_group $SUBNET_ID)
+fi
+
+dd_version=$(get_dd_version)
+dd_version_minor=$(echo $dd_version | sed -e 's/[0-9]*\.//')
+dd_version_major=$(echo $dd_version | sed -e 's/\.[0-9.]*//')
+dd_api_key=$(get_dd_api_key)
+hostname="$(echo "$instance_name" | sed -e 's/\./-/g')"
+
+# Create uesr data script
+if [[ $ami_platform != windows ]]; then
+    echo "Datadog Agent for linux will be installed"
+    # Check default user name for linux instance
+    default_user=$(get_linux_default_user $AMI_ID)
+    if [[ -n $default_user ]];then
+        echo "Default user for AMI $AMI_ID is likely: $default_user"
     else
-        sg_id=$(get_default_security_group $SUBNET_ID)
+        echo "Default user for AMI $AMI_ID not found!"
+        echo "Please check below AWS page"
+        echo "https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/managing-users.html#ami-default-user-names"
+        exit 1
     fi
-
-    local dd_version=$(get_dd_version)
-    local dd_version_minor=$(echo $dd_version | sed -e 's/[0-9]*\.//')
-    local dd_version_major=$(echo $dd_version | sed -e 's/\.[0-9.]*//')
-    local dd_api_key=$(get_dd_api_key)
-    local hostname="$(echo "$instance_name" | sed -e 's/\./-/g')"
-
-    # Create uesr data script
-    local user_data
-    if [[ $ami_platform != windows ]]; then
-        echo "Datadog Agent for linux will be installed"
-        # Check default user name for linux instance
-        local default_user=$(get_linux_default_user $AMI_ID)
-        if [[ -n $default_user ]];then
-            echo "Default user for AMI $AMI_ID is likely: $default_user"
-        else
-            echo "Default user for AMI $AMI_ID not found!"
-            echo "Please check below AWS page"
-            echo "https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/managing-users.html#ami-default-user-names"
-            exit 1
-        fi
-        user_data=$(create_linux_user_data $dd_version_major $dd_version_minor $dd_api_key)
-    elif [[ $ami_platform == windows ]]; then
-        echo "Datadog Agent for windows will be installed"
-        user_data=$(create_windows_user_data $dd_version)
+    if [[ "${RANDOM_LINUX_PASSWORD,,}" == "t"* ]] || [[ "${RANDOM_LINUX_PASSWORD,,}" == "y"* ]]; then
+        password_linux=$(generate_random_password)
+    else
+        password_linux="Datadog/4u"
     fi
+    user_data=$(create_linux_user_data "$dd_version_major" "$dd_version_minor" "$dd_api_key" "$password_linux")
+elif [[ $ami_platform == windows ]]; then
+    echo "Datadog Agent for windows will be installed"
+    user_data=$(create_windows_user_data $dd_version)
+fi
 
-    # Deploy Instance
-    local instance_id=$(deploy_ec2_instance "$ssh_key_name" "$sg_id")
+# Deploy Instance
+instance_id=$(deploy_ec2_instance "$instance_name" "$ssh_key_name" "$sg_id")
 
-    # Output the instance information
-    echo "---------------------------------"
-    echo "Datadog Agent version: ${dd_version}"
-    echo "Instance name: ${instance_name}"
-    echo "Instance ID: ${instance_id}"
-    echo "VPC ID: $(get_vpc_id $SUBNET_ID)"
-    echo "Subnet ID: ${SUBNET_ID}"
-    echo "Security Group ID: ${sg_id}"
-    echo "AMI ID: ${AMI_ID}"
-    echo "AMI Description: $(get_ami_description)"
-    echo "AMI Platform: $ami_platform"
-    local private_ip=$(get_private_ip $instance_id)
-    local public_ip=$(get_public_ip $instance_id)
-    [[ -n $private_ip ]] && echo "Private IP: $private_ip"
-    [[ -n $public_ip ]] && echo "Public IP: $public_ip"
-    if [[ $ami_platform != windows ]]; then
-        echo "User Name: $default_user"
-        echo "Password: Datadog/4u"
-    elif [[ $ami_platform == windows ]]; then
-        echo "User Name: Administrator"
-        local secret_file=$(get_secret_file_path "$ssh_key_name")
-        echo "pem file for Windows password decryption: $secret_file"
-        local password=$(get_windows_password $instance_id "$secret_file")
-        printf "Password: "
-        echo "${password}"
-        echo -n "${password}" | pbcopy
+# Output the instance information
+echo "---------------------------------"
+echo "Datadog Agent version: ${dd_version}"
+echo "Instance name: ${instance_name}"
+echo "Instance Type: ${INSTANCE_TYPE}"
+echo "Instance ID: ${instance_id}"
+echo "VPC ID: $(get_vpc_id $SUBNET_ID)"
+echo "Subnet ID: ${SUBNET_ID}"
+echo "Security Group ID: ${sg_id}"
+echo "AMI ID: ${AMI_ID}"
+echo "AMI Description: $(get_ami_description)"
+echo "AMI Platform: $ami_platform"
+private_ip=$(get_private_ip $instance_id)
+public_ip=$(get_public_ip $instance_id)
+[[ -n $private_ip ]] && echo "Private IP: $private_ip"
+[[ -n $public_ip ]] && echo "Public IP: $public_ip"
+if [[ $ami_platform != windows ]]; then
+    echo "User Name: $default_user"
+    echo "Password: ${password_linux}"
+elif [[ $ami_platform == windows ]]; then
+    echo "User Name: Administrator"
+    secret_file=$(get_secret_file_path "$ssh_key_name")
+    echo "pem file for Windows password decryption: $secret_file"
+    password_win=$(get_windows_password $instance_id "$secret_file")
+    printf "Password: "
+    echo "${password_win}"
+    echo -n "${password_win}" | pbcopy
+fi
+echo "URL: https://${REGION}.console.aws.amazon.com/ec2/home?region=${REGION}#InstanceDetails:instanceId=${instance_id}"
+echo "---------------------------------"
+
+addr_array=("$private_ip" "$public_ip")
+if [[ $ami_platform != windows ]]; then
+    addr=$(is_ssh_available "${addr_array[@]}")
+    echo "SSH to $addr is available now"
+    ssh_opts=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null)
+    ssh_cmd=(ssh "${ssh_opts[@]}" "${default_user}@${addr}")
+    secret=$(get_secret_local_file "$ssh_key_name")
+    if [[ -n $secret ]]; then
+        ssh_cmd+=(-i \"$secret\")
     fi
-    echo "URL: https://${REGION}.console.aws.amazon.com/ec2/home?region=${REGION}#InstanceDetails:instanceId=${instance_id}"
-    echo "---------------------------------"
-    
-    local addr_array=("$private_ip" "$public_ip")
-    if [[ $ami_platform != windows ]]; then
-        local addr=$(is_ssh_available "${addr_array[@]}")
-        echo "SSH to $addr is available now"
-        local ssh_opts=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null)
-        local ssh_cmd=(ssh "${ssh_opts[@]}" "${default_user}@${addr}")
-        local secret=$(get_secret_local_file "$ssh_key_name")
-        if [[ -n $secret ]]; then
-            ssh_cmd+=(-i \"$secret\")
-        fi
-        local cmd="${ssh_cmd[@]}"
-        echo "Command is in clip board: $cmd"
-        echo -n $cmd | pbcopy
-    elif [[ $ami_platform == windows ]]; then
-        local addr=$(is_rdp_available "${addr_array[@]}")
-        echo "RDP to $addr is available now"
-        local rdp_file=~/Downloads/${hostname}-${addr}.rdp
-        create_rdp_file "$addr" "Administrator" "$rdp_file"
-        open ~/Downloads
-    fi
-}
-
-main
+    cmd="${ssh_cmd[@]}"
+    echo "Command is in clip board: $cmd"
+    echo -n $cmd | pbcopy
+elif [[ $ami_platform == windows ]]; then
+    addr=$(is_rdp_available "${addr_array[@]}")
+    echo "RDP to $addr is available now"
+    rdp_file=~/Downloads/${hostname}-${addr}.rdp
+    create_rdp_file "$addr" "Administrator" "$rdp_file"
+    open ~/Downloads
+fi
 # Comment for avoiding unknown error
