@@ -693,6 +693,11 @@ if ! command -v fzf &> /dev/null ;then
     echo "fzf command is required. Installing it."
     brew update && brew install fzf
 fi
+# Install op command if not installed
+if ! command -v fzf &> /dev/null ;then
+    echo "op command is required. Installing it."
+    brew update && brew install 1password-cli
+fi
 
 # Reading default env variables
 if [ -f ~/.deploy_ec2.env ]; then
