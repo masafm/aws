@@ -349,13 +349,13 @@ function get_linux_default_user {
 
 function get_dd_version {
     local dd_versions=$(curl -L https://ddagent-windows-stable.s3.amazonaws.com/installers_v2.json 2>/dev/null | python3 -c "import sys, json, re; print('\n'.join([re.sub(r'-\d+$', '', key) for key in json.load(sys.stdin)['datadog-agent'].keys()]))" | sort -r | grep -e '^[6-7]\.')
-    if [[ -n $DD_VERSION ]];then
-        local dd_version_exists=$(echo "$dd_versions" | grep -e "^${DD_VERSION}\$" || true)
+    if [[ -n $VERSION_DATADOG ]];then
+        local dd_version_exists=$(echo "$dd_versions" | grep -e "^${VERSION_DATADOG}\$" || true)
         if [[ -n $dd_version_exists ]];then
-            echo $DD_VERSION
+            echo $VERSION_DATADOG
         else
-            echo "Invalid Datadog Agent version: $DD_VERSION" 1>&2
-            echo $(echo "$dd_versions" | show_fzf "${DD_VERSION} specified is invalid. Select Datadog Agent version")
+            echo "Invalid Datadog Agent version: $VERSION_DATADOG" 1>&2
+            echo $(echo "$dd_versions" | show_fzf "${VERSION_DATADOG} specified is invalid. Select Datadog Agent version")
         fi
     else
         echo $(echo "$dd_versions" | show_fzf "Select Datadog Agent version")
@@ -692,7 +692,7 @@ function main {
     ## Name of AWS ssh key pair
     SSH_KEY_PAIR_NAME=${SSH_KEY_PAIR_NAME:-""}
     ## Datadog Agent version
-    DD_VERSION=${DD_VERSION:-""}
+    VERSION_DATADOG=${VERSION_DATADOG:-""}
     ## Create new security group or update existing new security group(default: true)
     SG_CREATE=${SG_CREATE:-"true"}
     ## Include user-defined AMIs?
