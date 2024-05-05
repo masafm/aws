@@ -120,12 +120,33 @@ function fetch_public_subnet_ids {
     done
 }
 
+function is_cache_valid {
+    local cache_file=$1;shift
+    # Check if cache file exists
+    [[ -f "$cache_file" ]] || return 1  
+    # Get last modified time of the cache file
+    local last_modified=$(stat -c %Y "$cache_file")
+    # Get current time
+    local current_time=$(date +%s)
+    # Calculate elapsed time since last modified
+    local elapsed_time=$((current_time - last_modified))
+    # Set maximum age of cache
+    local max_age=${AMI_LIST_CACHE_EXPIRE}
+    # Return true if the elapsed time is less than the max age
+    [[ $elapsed_time -lt $max_age ]]
+}
+
 function search_amis {
     local preferred_ami_id="$1";shift
     local ami_info=""
     local all_amis=""
-    local amis filter os temp_file
+    local temp_file
+    local cache_dir="$HOME/.cache/deploy_ec2/amis"
+    local cache_file="$cache_dir/amazon_amis-${REGION}"
 
+    # Creating cache dir
+    mkdir -p "$cache_dir"
+    
     # Create a temporary directory to store output files
     local temp_dir=$(mktemp -d)
     
@@ -142,43 +163,40 @@ function search_amis {
         fi
     fi
 
-    # Retrieve owner IDs and save them in an array
-    echo "Fetching AMI owner IDs of official Amazon images..." >&2
-    local owners=$(aws ec2 describe-images --owners amazon --filters Name=is-public,Values=true --query 'Images[].OwnerId' --output text | tr '\t' '\n' | sort | uniq)
-    
-    echo "Fetching AMI information from Amazon..." >&2
     # Fetch AMI information for each owner ID
-    for owner in $owners; do
-        temp_file="$temp_dir/$owner"
-        (aws ec2 describe-images --filters Name=owner-id,Values=${owner} Name=architecture,Values=x86_64 --query "Images[*].[ImageId,Name,Description]" --output text > "$temp_file") &
-    done
+    local amis_file_path
+    if is_cache_valid "$cache_file" && [[ "${NO_CACHE,,}" == "f"* || "${NO_CACHE,,}" == "n"* ]]; then
+        amis_file_path="$cache_file"
+        echo "Using cache file for Amazon AMI..." >&2        
+    else
+        amis_file_path="$temp_dir/amazon_amis"
+        echo "Fetching AMI information from Amazon..." >&2
+        temp_file="$temp_dir/amazon_amis"
+        (aws ec2 describe-images --owners amazon --filters Name=is-public,Values=true Name=architecture,Values=x86_64 --query "Images[*].[ImageId,Name,Description]" --output text > "$temp_file") &
+    fi
     
-    # Fetch official AMIs in background
-    for os in "${!os_filters[@]}"; do
-        filter="${os_filters[$os]}"
-        temp_file="$temp_dir/$os"
-        echo "Fetching AMI information for $os..." >&2
-        (aws ec2 describe-images --filters $filter --query "Images[*].[ImageId,Name,Description]" --output text > "$temp_file") &
-    done
-
     # Fetch user-defined AMIs
+    touch "$temp_dir/user_defined_amis"
     if [[ "${INCLUDE_USER_DEF_AMIS,,}" == "t"* ]] || [[ "${INCLUDE_USER_DEF_AMIS,,}" == "y"* ]]; then
         temp_file="$temp_dir/user_defined_amis"
         echo "Fetching user-defined AMIs..." >&2
         (aws ec2 describe-images --owners "$owner_id" --query "Images[*].[ImageId,Name,Description]" --output text > "$temp_file") &
     fi
-
+    
     # Wait for all background processes to complete
     wait
-
-    # Merge all results
-    for file in $(ls "$temp_dir"); do
-        cat "$temp_dir/$file" >> "$temp_dir/all_amis"
-    done
-
+    
+    # Check if "$temp_dir/amazon_amis" exists and has a size greater than zero
+    if [ -f "$temp_dir/amazon_amis" ] && [ -s "$temp_dir/amazon_amis" ]; then
+        echo "Chashing AMIs list from Amazon..." >&2
+        cp -f "$temp_dir/amazon_amis" "$cache_file"
+    else
+        echo "File does not exist or is empty. No action taken." >&2
+    fi
+    
     # Display the AMIs in fzf, with the preferred AMI (if any) at the top
-    cat "$temp_dir/all_amis" | awk -F '\t' '{printf "%-20s %-50s %-80s\n", $1, $2, $3}' | show_fzf "Select an AMI" "true" | cut -f1 -d' '
-
+    cat "$temp_dir/user_defined_amis" "$cache_file" | sort -k2 | awk -F '\t' '{printf "%-20s %-50s %-80s\n", $1, $2, $3}' | show_fzf "Select an AMI" "true" | cut -f1 -d' '
+    
     # Clean up
     rm -r "$temp_dir"
 }
@@ -683,11 +701,15 @@ function main {
     
     # Global variables
     set +o nounset # Accept undefined variables
+    ## Disable any kind of caching
+    NO_CACHE=${NO_CACHE:-"false"}
     ## AWS region
     REGION=${REGION:-$(select_region)}
     AWS_REGION=$REGION
+    ## Amazon AMI cache list expire second
+    AMI_LIST_CACHE_EXPIRE=${AMI_LIST_CACHE_EXPIRE:-$((24 * 3600 * 30))}
     ## Amazon machine image ID
-    AMI_ID=${AMI_ID:-$(search_amis "$AMI_ID")}
+    AMI_ID=${AMI_ID:-$(search_amis)}
     ## Volume size of root volume
     VOLUME_SIZE=${VOLUME_SIZE:-"100"}
     ## Instance Type
