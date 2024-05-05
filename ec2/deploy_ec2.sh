@@ -370,7 +370,11 @@ function get_linux_default_user {
 }
 
 function get_dd_version {
-    local dd_versions=$(curl -L https://ddagent-windows-stable.s3.amazonaws.com/installers_v2.json 2>/dev/null | python3 -c "import sys, json, re; print('\n'.join([re.sub(r'-\d+$', '', key) for key in json.load(sys.stdin)['datadog-agent'].keys()]))" | sort -r | grep -e '^[6-7]\.')
+    local dd_versions_url="https://ddagent-windows-stable.s3.amazonaws.com/installers_v2.json"
+    local dd_versions=$(curl -L $dd_versions_url 2>/dev/null | \
+                            python3 -c "import sys, json, re; print('\n'.join([re.sub(r'-\d+$', '', key) for key in json.load(sys.stdin)['datadog-agent'].keys()]))" | \
+                            sort -r | \
+                            grep -e '^[6-7]\.')
     if [[ -n $VERSION_DATADOG ]];then
         local dd_version_exists=$(echo "$dd_versions" | grep -e "^${VERSION_DATADOG}\$" || true)
         if [[ -n $dd_version_exists ]];then
@@ -598,10 +602,10 @@ function get_windows_password {
 function get_secret_local_file {
     local ssh_key_name=$1;shift
     local secret_file
-    # Check for locally saved pem files
+    # Check for locally saved PEM files
     secret_files=$(find ~ -maxdepth 3 -type f -name "${ssh_key_name}.pem")
     if [[ $(wc -l <<<$secret_files) -gt 1 ]];then
-        secret_file=$(show_fzf "Select your pem file for ${ssh_key_name}" "false" <<<$secret_files)
+        secret_file=$(show_fzf "Select your PEM file for ${ssh_key_name}" "false" <<<$secret_files)
     else
         secret_file=$secret_files
     fi
@@ -625,7 +629,7 @@ function get_secret_1password {
                     -e 's/END PRIVATE KEY/END RSA PRIVATE KEY/' \
                     -e '/^[[:space:]]*$/d' >$secret_file
             if [[ -n $(grep "BEGIN OPENSSH PRIVATE KEY" "$secret_file") ]];then
-                ssh-keygen -p -f "$secret_file" -m PEM -N "" >&2
+                ssh-keygen -p -f "$secret_file" -m PEM -N "" >/dev/null 2>&1
             fi
             if [[ -n $(cat $secret_file) ]];then
                 break
@@ -746,7 +750,7 @@ set -o nounset # Don't accept undefined variables
 user_name=$(get_current_aws_user)
 # Retrieve my public IP address
 my_ip=$(curl -s https://checkip.amazonaws.com)
-ami_platform=$(determine_os_platform $AMI_ID)
+ami_platform=$(determine_os_platform)
 echo "The AMI ID $AMI_ID platform is ${ami_platform}."
 ssh_key_name=$(get_ssh_key)
 timestamp=$(date +%Y%m%d-%H%M%S)
@@ -782,18 +786,26 @@ if [[ $ami_platform != windows ]]; then
         exit 1
     fi
     if [[ "${RANDOM_LINUX_PASSWORD,,}" == "t"* ]] || [[ "${RANDOM_LINUX_PASSWORD,,}" == "y"* ]]; then
-        password_linux=$(generate_random_password)
+        password_host=$(generate_random_password)
     else
-        password_linux="Datadog/4u"
+        password_host="Datadog/4u"
     fi
-    user_data=$(create_linux_user_data "$dd_version_major" "$dd_version_minor" "$dd_api_key" "$password_linux")
+    user_data=$(create_linux_user_data "$dd_version_major" "$dd_version_minor" "$dd_api_key" "$password_host")
 elif [[ $ami_platform == windows ]]; then
+    # FIX ME: EU Windows may use different admin user name. For example French.
+    default_user="Administrator"
     echo "Datadog Agent for windows will be installed"
     user_data=$(create_windows_user_data $dd_version)
 fi
 
 # Deploy Instance
 instance_id=$(deploy_ec2_instance "$instance_name" "$ssh_key_name" "$sg_id")
+
+if [[ $ami_platform == windows ]]; then
+    secret_file=$(get_secret_file_path "$ssh_key_name")
+    echo "PEM file for Windows password decryption: $secret_file"
+    password_host=$(get_windows_password $instance_id "$secret_file")
+fi
 
 # Output the instance information
 echo "---------------------------------"
@@ -811,18 +823,10 @@ private_ip=$(get_private_ip $instance_id)
 public_ip=$(get_public_ip $instance_id)
 [[ -n $private_ip ]] && echo "Private IP: $private_ip"
 [[ -n $public_ip ]] && echo "Public IP: $public_ip"
-if [[ $ami_platform != windows ]]; then
-    echo "User Name: $default_user"
-    echo "Password: ${password_linux}"
-elif [[ $ami_platform == windows ]]; then
-    echo "User Name: Administrator"
-    secret_file=$(get_secret_file_path "$ssh_key_name")
-    echo "pem file for Windows password decryption: $secret_file"
-    password_win=$(get_windows_password $instance_id "$secret_file")
-    printf "Password: "
-    echo "${password_win}"
-    echo -n "${password_win}" | pbcopy
-fi
+echo "User Name: $default_user"
+echo "Password: ${password_host}"
+# Copy password to clipboard
+echo -n "${password_host}" | pbcopy
 echo "URL: https://${REGION}.console.aws.amazon.com/ec2/home?region=${REGION}#InstanceDetails:instanceId=${instance_id}"
 echo "---------------------------------"
 
@@ -837,7 +841,7 @@ if [[ $ami_platform != windows ]]; then
         ssh_cmd+=(-i \"$secret\")
     fi
     cmd="${ssh_cmd[@]}"
-    echo "Command is in clip board: $cmd"
+    echo "Command is in clipboard: $cmd"
     echo -n $cmd | pbcopy
 elif [[ $ami_platform == windows ]]; then
     addr=$(is_rdp_available "${addr_array[@]}")
