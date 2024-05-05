@@ -619,7 +619,14 @@ function get_secret_1password {
         fi
         item_title=$(op item list --vault="Private" --format=json | python3 -c "import sys, json; print('\n'.join([item['title'] for item in json.load(sys.stdin)]))" | show_fzf "Select your 1Password item for ${ssh_key_name} ssh key pair" "false")
         for i in "${keys[@]}"; do
-            op item get "$item_title" --fields "${i}" | sed -e 's/"//g' -e 's/BEGIN PRIVATE KEY/BEGIN RSA PRIVATE KEY/' -e 's/END PRIVATE KEY/END RSA PRIVATE KEY/' >$secret_file
+            op item get "$item_title" --fields "${i}" --reveal | \
+                sed -e 's/"//g' \
+                    -e 's/BEGIN PRIVATE KEY/BEGIN RSA PRIVATE KEY/' \
+                    -e 's/END PRIVATE KEY/END RSA PRIVATE KEY/' \
+                    -e '/^[[:space:]]*$/d' >$secret_file
+            if [[ -n $(grep "BEGIN OPENSSH PRIVATE KEY" "$secret_file") ]];then
+                ssh-keygen -p -f "$secret_file" -m PEM -N "" >&2
+            fi
             if [[ -n $(cat $secret_file) ]];then
                 break
             fi
