@@ -687,157 +687,151 @@ function get_instance_name {
     fi
 }
 
-function main {    
-    # Install fzf command if not installed
-    if ! command -v fzf &> /dev/null ;then
-        echo "fzf command is required. Installing it."
-        brew update && brew install fzf
-    fi
+# main function
+# Install fzf command if not installed
+if ! command -v fzf &> /dev/null ;then
+    echo "fzf command is required. Installing it."
+    brew update && brew install fzf
+fi
 
-    # Reading default env variables
-    if [ -f ~/.deploy_ec2.env ]; then
-        source ~/.deploy_ec2.env
-    fi
-    
-    # Global variables
-    set +o nounset # Accept undefined variables
-    ## Disable any kind of caching
-    NO_CACHE=${NO_CACHE:-"false"}
-    ## AWS region
-    REGION=${REGION:-$(select_region)}
-    AWS_REGION=$REGION
-    ## Amazon AMI cache list expire second
-    AMI_LIST_CACHE_EXPIRE=${AMI_LIST_CACHE_EXPIRE:-$((24 * 3600 * 30))}
-    ## Amazon machine image ID
-    AMI_ID=${AMI_ID:-$(search_amis)}
-    ## Volume size of root volume
-    VOLUME_SIZE=${VOLUME_SIZE:-"100"}
-    ## Instance Type
-    INSTANCE_TYPE=${INSTANCE_TYPE:-"c5.xlarge"}
-    ## Subnet ID
-    SUBNET_ID=${SUBNET_ID:-$(fetch_public_subnet_ids)}
-    ## Security group ID
-    SG_ID=${SG_ID:-""}
-    ## Name of AWS ssh key pair
-    SSH_KEY_PAIR_NAME=${SSH_KEY_PAIR_NAME:-""}
-    ## Datadog Agent version
-    VERSION_DATADOG=${VERSION_DATADOG:-""}
-    ## Create new security group or update existing new security group(default: true)
-    SG_CREATE=${SG_CREATE:-"true"}
-    ## Include user-defined AMIs?
-    INCLUDE_USER_DEF_AMIS=${INCLUDE_USER_DEF_AMIS:-"false"}
-    ## Password for linux will be Datadog/4u if this is ture/yes
-    RANDOM_LINUX_PASSWORD=${NO_RANDOM_LINUX_PASSWORD:-"true"}
-    set -o nounset # Don't accept undefined variables
-    
-    # Retrieve the username
-    local user_name=$(get_current_aws_user)
-    # Retrieve my public IP address
-    local my_ip=$(curl -s https://checkip.amazonaws.com)
-    local ami_platform=$(determine_os_platform $AMI_ID)
-    echo "The AMI ID $AMI_ID platform is ${ami_platform}."
-    local ssh_key_name=$(get_ssh_key)
-    local timestamp=$(date +%Y%m%d-%H%M%S)
-    # Set the instance name based on the username
-    local instance_name=$(get_instance_name "${user_name}-${ami_platform}-${timestamp}")
+# Reading default env variables
+if [ -f ~/.deploy_ec2.env ]; then
+    source ~/.deploy_ec2.env
+fi
 
-    local sg_id
-    if [[ -n $SG_ID ]];then
-        sg_id=$SG_ID
-    elif [[ "${SG_CREATE,,}" == "t"* ]] || [[ "${SG_CREATE,,}" == "y"* ]]; then
-        # If user wanto to create a new security group
-        sg_id=$(ensure_security_group $SUBNET_ID)
+# Global variables
+set +o nounset # Accept undefined variables
+## Disable any kind of caching
+NO_CACHE=${NO_CACHE:-"false"}
+## AWS region
+REGION=${REGION:-$(select_region)}
+AWS_REGION=$REGION
+## Amazon AMI cache list expire second
+AMI_LIST_CACHE_EXPIRE=${AMI_LIST_CACHE_EXPIRE:-$((24 * 3600 * 30))}
+## Amazon machine image ID
+AMI_ID=${AMI_ID:-$(search_amis)}
+## Volume size of root volume
+VOLUME_SIZE=${VOLUME_SIZE:-"100"}
+## Instance Type
+INSTANCE_TYPE=${INSTANCE_TYPE:-"c5.xlarge"}
+## Subnet ID
+SUBNET_ID=${SUBNET_ID:-$(fetch_public_subnet_ids)}
+## Security group ID
+SG_ID=${SG_ID:-""}
+## Name of AWS ssh key pair
+SSH_KEY_PAIR_NAME=${SSH_KEY_PAIR_NAME:-""}
+## Datadog Agent version
+VERSION_DATADOG=${VERSION_DATADOG:-""}
+## Create new security group or update existing new security group(default: true)
+SG_CREATE=${SG_CREATE:-"true"}
+## Include user-defined AMIs?
+INCLUDE_USER_DEF_AMIS=${INCLUDE_USER_DEF_AMIS:-"false"}
+## Password for linux will be Datadog/4u if this is ture/yes
+RANDOM_LINUX_PASSWORD=${NO_RANDOM_LINUX_PASSWORD:-"true"}
+set -o nounset # Don't accept undefined variables
+
+# Retrieve the username
+user_name=$(get_current_aws_user)
+# Retrieve my public IP address
+my_ip=$(curl -s https://checkip.amazonaws.com)
+ami_platform=$(determine_os_platform $AMI_ID)
+echo "The AMI ID $AMI_ID platform is ${ami_platform}."
+ssh_key_name=$(get_ssh_key)
+timestamp=$(date +%Y%m%d-%H%M%S)
+# Set the instance name based on the username
+instance_name=$(get_instance_name "${user_name}-${ami_platform}-${timestamp}")
+
+if [[ -n $SG_ID ]];then
+    sg_id=$SG_ID
+elif [[ "${SG_CREATE,,}" == "t"* ]] || [[ "${SG_CREATE,,}" == "y"* ]]; then
+    # If user wanto to create a new security group
+    sg_id=$(ensure_security_group $SUBNET_ID)
+else
+    sg_id=$(get_default_security_group $SUBNET_ID)
+fi
+
+dd_version=$(get_dd_version)
+dd_version_minor=$(echo $dd_version | sed -e 's/[0-9]*\.//')
+dd_version_major=$(echo $dd_version | sed -e 's/\.[0-9.]*//')
+dd_api_key=$(get_dd_api_key)
+hostname="$(echo "$instance_name" | sed -e 's/\./-/g')"
+
+# Create uesr data script
+if [[ $ami_platform != windows ]]; then
+    echo "Datadog Agent for linux will be installed"
+    # Check default user name for linux instance
+    default_user=$(get_linux_default_user $AMI_ID)
+    if [[ -n $default_user ]];then
+        echo "Default user for AMI $AMI_ID is likely: $default_user"
     else
-        sg_id=$(get_default_security_group $SUBNET_ID)
+        echo "Default user for AMI $AMI_ID not found!"
+        echo "Please check below AWS page"
+        echo "https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/managing-users.html#ami-default-user-names"
+        exit 1
     fi
-
-    local dd_version=$(get_dd_version)
-    local dd_version_minor=$(echo $dd_version | sed -e 's/[0-9]*\.//')
-    local dd_version_major=$(echo $dd_version | sed -e 's/\.[0-9.]*//')
-    local dd_api_key=$(get_dd_api_key)
-    local hostname="$(echo "$instance_name" | sed -e 's/\./-/g')"
-
-    # Create uesr data script
-    local user_data
-    if [[ $ami_platform != windows ]]; then
-        echo "Datadog Agent for linux will be installed"
-        # Check default user name for linux instance
-        local default_user=$(get_linux_default_user $AMI_ID)
-        if [[ -n $default_user ]];then
-            echo "Default user for AMI $AMI_ID is likely: $default_user"
-        else
-            echo "Default user for AMI $AMI_ID not found!"
-            echo "Please check below AWS page"
-            echo "https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/managing-users.html#ami-default-user-names"
-            exit 1
-        fi
-        local password_linux
-        if [[ "${RANDOM_LINUX_PASSWORD,,}" == "t"* ]] || [[ "${RANDOM_LINUX_PASSWORD,,}" == "y"* ]]; then
-            password_linux=$(generate_random_password)
-        else
-            password_linux="Datadog/4u"
-        fi
-        user_data=$(create_linux_user_data "$dd_version_major" "$dd_version_minor" "$dd_api_key" "$password_linux")
-    elif [[ $ami_platform == windows ]]; then
-        echo "Datadog Agent for windows will be installed"
-        user_data=$(create_windows_user_data $dd_version)
+    if [[ "${RANDOM_LINUX_PASSWORD,,}" == "t"* ]] || [[ "${RANDOM_LINUX_PASSWORD,,}" == "y"* ]]; then
+        password_linux=$(generate_random_password)
+    else
+        password_linux="Datadog/4u"
     fi
+    user_data=$(create_linux_user_data "$dd_version_major" "$dd_version_minor" "$dd_api_key" "$password_linux")
+elif [[ $ami_platform == windows ]]; then
+    echo "Datadog Agent for windows will be installed"
+    user_data=$(create_windows_user_data $dd_version)
+fi
 
-    # Deploy Instance
-    local instance_id=$(deploy_ec2_instance "$instance_name" "$ssh_key_name" "$sg_id")
+# Deploy Instance
+instance_id=$(deploy_ec2_instance "$instance_name" "$ssh_key_name" "$sg_id")
 
-    # Output the instance information
-    echo "---------------------------------"
-    echo "Datadog Agent version: ${dd_version}"
-    echo "Instance name: ${instance_name}"
-    echo "Instance Type: ${INSTANCE_TYPE}"
-    echo "Instance ID: ${instance_id}"
-    echo "VPC ID: $(get_vpc_id $SUBNET_ID)"
-    echo "Subnet ID: ${SUBNET_ID}"
-    echo "Security Group ID: ${sg_id}"
-    echo "AMI ID: ${AMI_ID}"
-    echo "AMI Description: $(get_ami_description)"
-    echo "AMI Platform: $ami_platform"
-    local private_ip=$(get_private_ip $instance_id)
-    local public_ip=$(get_public_ip $instance_id)
-    [[ -n $private_ip ]] && echo "Private IP: $private_ip"
-    [[ -n $public_ip ]] && echo "Public IP: $public_ip"
-    if [[ $ami_platform != windows ]]; then
-        echo "User Name: $default_user"
-        echo "Password: ${password_linux}"
-    elif [[ $ami_platform == windows ]]; then
-        echo "User Name: Administrator"
-        local secret_file=$(get_secret_file_path "$ssh_key_name")
-        echo "pem file for Windows password decryption: $secret_file"
-        local password_win=$(get_windows_password $instance_id "$secret_file")
-        printf "Password: "
-        echo "${password_win}"
-        echo -n "${password_win}" | pbcopy
+# Output the instance information
+echo "---------------------------------"
+echo "Datadog Agent version: ${dd_version}"
+echo "Instance name: ${instance_name}"
+echo "Instance Type: ${INSTANCE_TYPE}"
+echo "Instance ID: ${instance_id}"
+echo "VPC ID: $(get_vpc_id $SUBNET_ID)"
+echo "Subnet ID: ${SUBNET_ID}"
+echo "Security Group ID: ${sg_id}"
+echo "AMI ID: ${AMI_ID}"
+echo "AMI Description: $(get_ami_description)"
+echo "AMI Platform: $ami_platform"
+private_ip=$(get_private_ip $instance_id)
+public_ip=$(get_public_ip $instance_id)
+[[ -n $private_ip ]] && echo "Private IP: $private_ip"
+[[ -n $public_ip ]] && echo "Public IP: $public_ip"
+if [[ $ami_platform != windows ]]; then
+    echo "User Name: $default_user"
+    echo "Password: ${password_linux}"
+elif [[ $ami_platform == windows ]]; then
+    echo "User Name: Administrator"
+    secret_file=$(get_secret_file_path "$ssh_key_name")
+    echo "pem file for Windows password decryption: $secret_file"
+    password_win=$(get_windows_password $instance_id "$secret_file")
+    printf "Password: "
+    echo "${password_win}"
+    echo -n "${password_win}" | pbcopy
+fi
+echo "URL: https://${REGION}.console.aws.amazon.com/ec2/home?region=${REGION}#InstanceDetails:instanceId=${instance_id}"
+echo "---------------------------------"
+
+addr_array=("$private_ip" "$public_ip")
+if [[ $ami_platform != windows ]]; then
+    addr=$(is_ssh_available "${addr_array[@]}")
+    echo "SSH to $addr is available now"
+    ssh_opts=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null)
+    ssh_cmd=(ssh "${ssh_opts[@]}" "${default_user}@${addr}")
+    secret=$(get_secret_local_file "$ssh_key_name")
+    if [[ -n $secret ]]; then
+        ssh_cmd+=(-i \"$secret\")
     fi
-    echo "URL: https://${REGION}.console.aws.amazon.com/ec2/home?region=${REGION}#InstanceDetails:instanceId=${instance_id}"
-    echo "---------------------------------"
-    
-    local addr_array=("$private_ip" "$public_ip")
-    if [[ $ami_platform != windows ]]; then
-        local addr=$(is_ssh_available "${addr_array[@]}")
-        echo "SSH to $addr is available now"
-        local ssh_opts=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null)
-        local ssh_cmd=(ssh "${ssh_opts[@]}" "${default_user}@${addr}")
-        local secret=$(get_secret_local_file "$ssh_key_name")
-        if [[ -n $secret ]]; then
-            ssh_cmd+=(-i \"$secret\")
-        fi
-        local cmd="${ssh_cmd[@]}"
-        echo "Command is in clip board: $cmd"
-        echo -n $cmd | pbcopy
-    elif [[ $ami_platform == windows ]]; then
-        local addr=$(is_rdp_available "${addr_array[@]}")
-        echo "RDP to $addr is available now"
-        local rdp_file=~/Downloads/${hostname}-${addr}.rdp
-        create_rdp_file "$addr" "Administrator" "$rdp_file"
-        open ~/Downloads
-    fi
-}
-
-main
+    cmd="${ssh_cmd[@]}"
+    echo "Command is in clip board: $cmd"
+    echo -n $cmd | pbcopy
+elif [[ $ami_platform == windows ]]; then
+    addr=$(is_rdp_available "${addr_array[@]}")
+    echo "RDP to $addr is available now"
+    rdp_file=~/Downloads/${hostname}-${addr}.rdp
+    create_rdp_file "$addr" "Administrator" "$rdp_file"
+    open ~/Downloads
+fi
 # Comment for avoiding unknown error
