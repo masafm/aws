@@ -25,7 +25,7 @@ function show_fzf {
     fi
     local selected_line=$(echo "$input" | fzf $opt_height --header "$title")
     echo -e "$selected_line"
-    echo -e "  Choice: \033[0;32m$(sed -e 's/ .*//'<<<$selected_line)\033[0m" >&2
+    echo -e "  Choice: \033[0;32m${selected_line}\033[0m" >&2
 }
 
 function select_region {
