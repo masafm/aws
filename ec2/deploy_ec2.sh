@@ -1,9 +1,10 @@
 #!/bin/bash
-set -eu         # Stop script when error happened
-set -o nounset # Don't accept undefined variables
+# Stop script when error and undefined variables used
+set -eu
 
 function show_fzf {
     title=$1;shift
+    full_screen=$1;shift
     
     # Expected maximum height
     local max_height=20
@@ -19,7 +20,10 @@ function show_fzf {
 
     echo -e "\033[0;33m${title}\033[0m" >&2
     # Execute fzf with the calculated height
-    local selected_line=$(echo "$input" | fzf --height $actual_height --header "$title")
+    if [[ -z $full_screen ]] || [[ "${full_screen,,}" == "f"* ]] || [[ "${full_screen,,}" == "n"* ]];then
+        opt_height="--height $actual_height"
+    fi
+    local selected_line=$(echo "$input" | fzf $opt_height --header "$title")
     echo -e "$selected_line"
     echo -e "  Choice: \033[0;32m$(sed -e 's/ .*//'<<<$selected_line)\033[0m" >&2
 }
@@ -78,7 +82,7 @@ function select_region {
     done <<< "$regions"
 
     # Use fzf to select a region, placing the default region at the top if it exists
-    local selected_region=$(echo -e "$default_region_info$region_info" | show_fzf "Select AWS Region" | awk '{print $1}')
+    local selected_region=$(echo -e "$default_region_info$region_info" | show_fzf "Select AWS Region" "false" | awk '{print $1}')
     echo $selected_region
 }
 
@@ -173,7 +177,7 @@ function search_amis {
     done
 
     # Display the AMIs in fzf, with the preferred AMI (if any) at the top
-    cat "$temp_dir/all_amis" | awk -F '\t' '{printf "%-20s %-50s %-80s\n", $1, $2, $3}' | show_fzf "Select an AMI" | cut -f1 -d' '
+    cat "$temp_dir/all_amis" | awk -F '\t' '{printf "%-20s %-50s %-80s\n", $1, $2, $3}' | show_fzf "Select an AMI" "true" | cut -f1 -d' '
 
     # Clean up
     rm -r "$temp_dir"
@@ -273,9 +277,9 @@ function get_ssh_key {
         local default_name_exist=$(echo "$items" | grep "^$default_name$" || true)
         if [[ -n $default_name_exist ]]; then
             items=$(echo "$items" | grep -v "^$default_name$" | sort)
-            echo $(echo -e "$default_name\n$items" | show_fzf "Select your SSH key name")
+            echo $(echo -e "$default_name\n$items" | show_fzf "Select your SSH key name" "false")
         else
-            echo $(echo -e "$items" | show_fzf "Select your SSH key name")
+            echo $(echo -e "$items" | show_fzf "Select your SSH key name" "false")
         fi
     fi
 }
@@ -354,21 +358,20 @@ function get_dd_version {
         if [[ -n $dd_version_exists ]];then
             echo $VERSION_DATADOG
         else
-            echo "Invalid Datadog Agent version: $VERSION_DATADOG" 1>&2
-            echo $(echo "$dd_versions" | show_fzf "${VERSION_DATADOG} specified is invalid. Select Datadog Agent version")
+            echo -e "\033[0;31mInvalid Datadog Agent version: $VERSION_DATADOG\033[0m" 1>&2
         fi
-    else
-        echo $(echo "$dd_versions" | show_fzf "Select Datadog Agent version")
     fi
+    echo $(echo "$dd_versions" | show_fzf "Select Datadog Agent version" "false")
 }
 
 function create_linux_user_data {
     local dd_version_major=$1;shift
     local dd_version_minor="DD_AGENT_MINOR_VERSION="$1;shift
     local dd_api_key=$1;shift
+    local password=$1;shift
     cat <<EOF
 #!/bin/bash -x
-echo "$default_user:Datadog/4u" | sudo chpasswd
+echo "$default_user:$password" | sudo chpasswd
 sudo sh -c "echo \"$hostname\" >/etc/hostname"
 sudo sh -c "hostname \"$hostname\""
 sudo sh -c "echo '---------------------------------------------------------------------------'>>/etc/motd"
@@ -380,10 +383,14 @@ DD_API_KEY=${dd_api_key} DD_SITE="${DD_SITE:-datadoghq.com}" ${dd_version_minor}
 EOF
 }
 
+function generate_random_password {
+    # Generate random passowrd
+    echo "$(openssl rand -base64 12 | tr -cd '[:alnum:]' | cut -c -15)@"
+}
+
 function create_windows_user_data {
     local dd_version=$1;shift
-    # Generate random passowrd
-    local dd_agentuser_pass="$(openssl rand -base64 12 | tr -cd '[:alnum:]' | cut -c -15)@"
+    local dd_agentuser_pass="$(generate_random_password)"
     echo "DDAGENTUSER_PASSWORD is ${dd_agentuser_pass}"
     cat <<EOF
 <powershell>
@@ -576,7 +583,7 @@ function get_secret_local_file {
     # Check for locally saved pem files
     secret_files=$(find ~ -maxdepth 3 -type f -name "${ssh_key_name}.pem")
     if [[ $(wc -l <<<$secret_files) -gt 1 ]];then
-        secret_file=$(show_fzf "Select your pem file for ${ssh_key_name}" <<<$secret_files)
+        secret_file=$(show_fzf "Select your pem file for ${ssh_key_name}" "false" <<<$secret_files)
     else
         secret_file=$secret_files
     fi
@@ -592,7 +599,7 @@ function get_secret_1password {
         if [[ -n $(echo $LANG | grep -i ja_JP) ]];then
             keys=("秘密鍵" "${keys[@]}")
         fi
-        item_title=$(op item list --vault="Private" --format=json | python3 -c "import sys, json; print('\n'.join([item['title'] for item in json.load(sys.stdin)]))" | show_fzf "Select your 1Password item for ${ssh_key_name} ssh key pair")
+        item_title=$(op item list --vault="Private" --format=json | python3 -c "import sys, json; print('\n'.join([item['title'] for item in json.load(sys.stdin)]))" | show_fzf "Select your 1Password item for ${ssh_key_name} ssh key pair" "false")
         for i in "${keys[@]}"; do
             op item get "$item_title" --fields "${i}" | sed -e 's/"//g' -e 's/BEGIN PRIVATE KEY/BEGIN RSA PRIVATE KEY/' -e 's/END PRIVATE KEY/END RSA PRIVATE KEY/' >$secret_file
             if [[ -n $(cat $secret_file) ]];then
@@ -662,7 +669,7 @@ function get_instance_name {
     fi
 }
 
-function main {
+function main {    
     # Install fzf command if not installed
     if ! command -v fzf &> /dev/null ;then
         echo "fzf command is required. Installing it."
@@ -696,7 +703,9 @@ function main {
     ## Create new security group or update existing new security group(default: true)
     SG_CREATE=${SG_CREATE:-"true"}
     ## Include user-defined AMIs?
-    INCLUDE_USER_DEF_AMIS=${INCLUDE_USER_DEF_AMIS:-""}
+    INCLUDE_USER_DEF_AMIS=${INCLUDE_USER_DEF_AMIS:-"false"}
+    ## Password for linux will be Datadog/4u if this is ture/yes
+    RANDOM_LINUX_PASSWORD=${NO_RANDOM_LINUX_PASSWORD:-"true"}
     set -o nounset # Don't accept undefined variables
     
     # Retrieve the username
@@ -740,7 +749,13 @@ function main {
             echo "https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/managing-users.html#ami-default-user-names"
             exit 1
         fi
-        user_data=$(create_linux_user_data $dd_version_major $dd_version_minor $dd_api_key)
+        local password_linux
+        if [[ "${RANDOM_LINUX_PASSWORD,,}" == "t"* ]] || [[ "${RANDOM_LINUX_PASSWORD,,}" == "y"* ]]; then
+            password_linux=$(generate_random_password)
+        else
+            password_linux="Datadog/4u"
+        fi
+        user_data=$(create_linux_user_data "$dd_version_major" "$dd_version_minor" "$dd_api_key" "$password_linux")
     elif [[ $ami_platform == windows ]]; then
         echo "Datadog Agent for windows will be installed"
         user_data=$(create_windows_user_data $dd_version)
@@ -767,15 +782,15 @@ function main {
     [[ -n $public_ip ]] && echo "Public IP: $public_ip"
     if [[ $ami_platform != windows ]]; then
         echo "User Name: $default_user"
-        echo "Password: Datadog/4u"
+        echo "Password: ${password_linux}"
     elif [[ $ami_platform == windows ]]; then
         echo "User Name: Administrator"
         local secret_file=$(get_secret_file_path "$ssh_key_name")
         echo "pem file for Windows password decryption: $secret_file"
-        local password=$(get_windows_password $instance_id "$secret_file")
+        local password_win=$(get_windows_password $instance_id "$secret_file")
         printf "Password: "
-        echo "${password}"
-        echo -n "${password}" | pbcopy
+        echo "${password_win}"
+        echo -n "${password_win}" | pbcopy
     fi
     echo "URL: https://${REGION}.console.aws.amazon.com/ec2/home?region=${REGION}#InstanceDetails:instanceId=${instance_id}"
     echo "---------------------------------"
