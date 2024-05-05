@@ -158,9 +158,11 @@ function search_amis {
     done
 
     # Fetch user-defined AMIs
-    temp_file="$temp_dir/user_defined_amis"
-    echo "Fetching user-defined AMIs..." >&2
-    (aws ec2 describe-images --owners "$owner_id" --query "Images[*].[ImageId,Name,Description]" --output text > "$temp_file") &
+    if [[ "${INCLUDE_USER_DEF_AMIS,,}" == "t"* ]] || [[ "${INCLUDE_USER_DEF_AMIS,,}" == "y"* ]]; then
+        temp_file="$temp_dir/user_defined_amis"
+        echo "Fetching user-defined AMIs..." >&2
+        (aws ec2 describe-images --owners "$owner_id" --query "Images[*].[ImageId,Name,Description]" --output text > "$temp_file") &
+    fi
 
     # Wait for all background processes to complete
     wait
@@ -613,7 +615,7 @@ function get_secret_file_path {
 function is_ssh_available {
     is_tcp_port_available 22 "$@"
     local sleep_sec=15
-    echo "Waiting $sleep_sec more sec for user script run"
+    echo "Waiting $sleep_sec more sec for user script run" >&2
     sleep $sleep_sec
 }
 
@@ -693,6 +695,8 @@ function main {
     DD_VERSION=${DD_VERSION:-""}
     ## Create new security group or update existing new security group(default: true)
     SG_CREATE=${SG_CREATE:-"true"}
+    ## Include user-defined AMIs?
+    INCLUDE_USER_DEF_AMIS=${INCLUDE_USER_DEF_AMIS:-""}
     set -o nounset # Don't accept undefined variables
     
     # Retrieve the username
