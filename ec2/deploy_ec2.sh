@@ -743,7 +743,7 @@ SG_CREATE=${SG_CREATE:-"true"}
 ## Include user-defined AMIs?
 INCLUDE_USER_DEF_AMIS=${INCLUDE_USER_DEF_AMIS:-"false"}
 ## Password for linux will be Datadog/4u if this is ture/yes
-RANDOM_LINUX_PASSWORD=${NO_RANDOM_LINUX_PASSWORD:-"true"}
+RANDOM_LINUX_PASSWORD=${RANDOM_LINUX_PASSWORD:-"true"}
 set -o nounset # Don't accept undefined variables
 
 # Retrieve the username
