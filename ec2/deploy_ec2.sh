@@ -699,6 +699,11 @@ function get_instance_name {
 }
 
 # main function
+# Exit if aws command is not working
+if ! aws sts get-caller-identity >/dev/null 2>&1;then
+    echo "AWS command is not working. Exiting..."
+    exit 1
+fi
 # Install fzf command if not installed
 if ! command -v fzf &> /dev/null ;then
     echo "fzf command is required. Installing it."
