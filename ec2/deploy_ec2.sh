@@ -2,7 +2,7 @@
 # Stop script when error and undefined variables used
 set -eu
 
-function show_fzf {
+function _show_fzf {
     title=$1;shift
     full_screen=$1;shift
     
@@ -24,6 +24,9 @@ function show_fzf {
         opt_height="--height $actual_height"
     fi
     local selected_line=$(echo "$input" | fzf $opt_height --header "$title")
+    if [[ -z $selected_line ]];then
+        return 1
+    fi
     echo -e "$selected_line"
     echo -e "  Choice: \033[0;32m${selected_line}\033[0m" >&2
 }
@@ -82,7 +85,10 @@ function select_region {
     done <<< "$regions"
 
     # Use fzf to select a region, placing the default region at the top if it exists
-    local selected_region=$(echo -e "$default_region_info$region_info" | show_fzf "Select AWS Region" "false" | awk '{print $1}')
+    local selected_region=$(echo -e "$default_region_info$region_info" | _show_fzf "Select AWS Region" "false" | awk '{print $1}')
+    if [[ -z $selected_region ]];then
+        return 1
+    fi
     echo $selected_region
 }
 
@@ -195,7 +201,7 @@ function search_amis {
     fi
     
     # Display the AMIs in fzf, with the preferred AMI (if any) at the top
-    cat "$temp_dir/user_defined_amis" "$cache_file" | sort -k2 | awk -F '\t' '{printf "%-20s %-50s %-80s\n", $1, $2, $3}' | show_fzf "Select an AMI" "true" | cut -f1 -d' '
+    cat "$temp_dir/user_defined_amis" "$cache_file" | sort -k2 | awk -F '\t' '{printf "%-20s %-50s %-80s\n", $1, $2, $3}' | _show_fzf "Select an AMI" "true" | cut -f1 -d' '
     
     # Clean up
     rm -r "$temp_dir"
@@ -295,9 +301,9 @@ function get_ssh_key {
         local default_name_exist=$(echo "$items" | grep "^$default_name$" || true)
         if [[ -n $default_name_exist ]]; then
             items=$(echo "$items" | grep -v "^$default_name$" | sort)
-            echo $(echo -e "$default_name\n$items" | show_fzf "Select your SSH key name" "false")
+            echo $(echo -e "$default_name\n$items" | _show_fzf "Select your SSH key name" "false")
         else
-            echo $(echo -e "$items" | show_fzf "Select your SSH key name" "false")
+            echo $(echo -e "$items" | _show_fzf "Select your SSH key name" "false")
         fi
     fi
 }
@@ -383,7 +389,7 @@ function get_dd_version {
             echo -e "\033[0;31mInvalid Datadog Agent version: $VERSION_DATADOG\033[0m" 1>&2
         fi
     fi
-    echo $(echo "$dd_versions" | show_fzf "Select Datadog Agent version" "false")
+    echo $(echo "$dd_versions" | _show_fzf "Select Datadog Agent version" "false")
 }
 
 function create_linux_user_data {
@@ -605,14 +611,14 @@ function get_secret_local_file {
     # Check for locally saved PEM files
     secret_files=$(find ~ -maxdepth 3 -type f -name "${ssh_key_name}.pem")
     if [[ $(wc -l <<<$secret_files) -gt 1 ]];then
-        secret_file=$(show_fzf "Select your PEM file for ${ssh_key_name}" "false" <<<$secret_files)
+        secret_file=$(_show_fzf "Select your PEM file for ${ssh_key_name}" "false" <<<$secret_files)
     else
         secret_file=$secret_files
     fi
     echo $secret_file
 }
 
-function get_secret_1password {
+function _get_secret_1password {
     local ssh_key_name=$1;shift
     local secret_file
     if command -v op &> /dev/null;then
@@ -621,7 +627,11 @@ function get_secret_1password {
         if [[ -n $(echo $LANG | grep -i ja_JP) ]];then
             keys=("秘密鍵" "${keys[@]}")
         fi
-        item_title=$(op item list --vault="Private" --format=json | python3 -c "import sys, json; print('\n'.join([item['title'] for item in json.load(sys.stdin)]))" | show_fzf "Select your 1Password item for ${ssh_key_name} ssh key pair" "false")
+        item_title=$(op item list --vault="Private" --format=json | python3 -c "import sys, json; print('\n'.join([item['title'] for item in json.load(sys.stdin)]))" | \
+                         _show_fzf "Select your 1Password item for ${ssh_key_name} ssh key pair" "false")
+        if [[ -z $item_title ]];then
+            return 1
+        fi
         for i in "${keys[@]}"; do
             op item get "$item_title" --fields "${i}" --reveal | \
                 sed -e 's/"//g' \
@@ -643,7 +653,7 @@ function get_secret_file_path {
     local ssh_key_name=$1;shift
     local secret_file=$(get_secret_local_file "$ssh_key_name")
     if [[ -z $secret_file ]];then
-        secret_file=$(get_secret_1password "$ssh_key_name")
+        secret_file=$(_get_secret_1password "$ssh_key_name")
     fi
     echo $secret_file
 }
@@ -725,12 +735,12 @@ set +o nounset # Accept undefined variables
 ## Disable any kind of caching
 NO_CACHE=${NO_CACHE:-"false"}
 ## AWS region
-REGION=${REGION:-$(select_region)}
+REGION=${REGION:-$(select_region)};[[ -z $REGION ]] && exit 1
 AWS_REGION=$REGION
 ## Amazon AMI cache list expire second
 AMI_LIST_CACHE_EXPIRE=${AMI_LIST_CACHE_EXPIRE:-$((24 * 3600 * 30))}
 ## Amazon machine image ID
-AMI_ID=${AMI_ID:-$(search_amis)}
+AMI_ID=${AMI_ID:-$(search_amis)};[[ -z $AMI_ID ]] && exit 1
 ## Volume size of root volume
 VOLUME_SIZE=${VOLUME_SIZE:-"100"}
 ## Instance Type
@@ -757,7 +767,7 @@ user_name=$(get_current_aws_user)
 my_ip=$(curl -s https://checkip.amazonaws.com)
 ami_platform=$(determine_os_platform)
 echo "The AMI ID $AMI_ID platform is ${ami_platform}."
-ssh_key_name=$(get_ssh_key)
+ssh_key_name=$(get_ssh_key);[[ -z $ssh_key_name ]] && exit 1
 timestamp=$(date +%Y%m%d-%H%M%S)
 # Set the instance name based on the username
 instance_name=$(get_instance_name "${user_name}-${ami_platform}-${timestamp}")
@@ -771,7 +781,7 @@ else
     sg_id=$(get_default_security_group $SUBNET_ID)
 fi
 
-dd_version=$(get_dd_version)
+dd_version=$(get_dd_version);[[ -z $dd_version ]] && exit 1
 dd_version_minor=$(echo $dd_version | sed -e 's/[0-9]*\.//')
 dd_version_major=$(echo $dd_version | sed -e 's/\.[0-9.]*//')
 dd_api_key=$(get_dd_api_key)
@@ -807,7 +817,7 @@ fi
 instance_id=$(deploy_ec2_instance "$instance_name" "$ssh_key_name" "$sg_id")
 
 if [[ $ami_platform == windows ]]; then
-    secret_file=$(get_secret_file_path "$ssh_key_name")
+    secret_file=$(get_secret_file_path "$ssh_key_name");[[ -z $secret_file ]] && exit 1
     echo "PEM file for Windows password decryption: $secret_file"
     password_host=$(get_windows_password $instance_id "$secret_file")
 fi
@@ -841,9 +851,9 @@ if [[ $ami_platform != windows ]]; then
     echo "SSH to $addr is available now"
     ssh_opts=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null)
     ssh_cmd=(ssh "${ssh_opts[@]}" "${default_user}@${addr}")
-    secret=$(get_secret_local_file "$ssh_key_name")
-    if [[ -n $secret ]]; then
-        ssh_cmd+=(-i \"$secret\")
+    secret_file=$(get_secret_local_file "$ssh_key_name")
+    if [[ -n $secret_file ]]; then
+        ssh_cmd+=(-i \"$secret_file\")
     fi
     cmd="${ssh_cmd[@]}"
     echo "Command is in clipboard: $cmd"
