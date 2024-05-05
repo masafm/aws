@@ -403,7 +403,7 @@ EOF
 
 function generate_random_password {
     # Generate random passowrd
-    echo "$(openssl rand -base64 12 | tr -cd '[:alnum:]' | cut -c -31)@"
+    echo "$(openssl rand -base64 24 | tr -cd '[:alnum:]' | cut -c -31)@"
 }
 
 function create_windows_user_data {
