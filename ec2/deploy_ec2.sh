@@ -694,7 +694,7 @@ if ! command -v fzf &> /dev/null ;then
     brew update && brew install fzf
 fi
 # Install op command if not installed
-if ! command -v fzf &> /dev/null ;then
+if ! command -v op &> /dev/null ;then
     echo "op command is required. Installing it."
     brew update && brew install 1password-cli
 fi
