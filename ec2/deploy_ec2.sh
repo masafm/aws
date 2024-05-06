@@ -357,7 +357,7 @@ function get_ami_description {
     echo $(aws ec2 describe-images --image-ids $AMI_ID --query 'Images[*].Description' --output text)
 }
 
-function get_linux_default_user {
+function _get_linux_default_user {
     local ami_info=$(aws ec2 describe-images --image-ids $AMI_ID --query 'Images[*].Description' --output text | tr '[:upper:]' '[:lower:]' | tr -d '[:punct:]' | tr -d '[:space:]')
     if [[ $ami_info == *"amazonlinux"* ]]; then
         echo "ec2-user"
@@ -377,6 +377,36 @@ function get_linux_default_user {
         echo "ec2-user"
     else
         echo ""
+    fi
+}
+
+function _get_windows_default_user {
+    local ami_info=$(aws ec2 describe-images --image-ids $AMI_ID --query 'Images[*].Description' --output text | tr '[:upper:]' '[:lower:]' | tr -d '[:punct:]' | tr -d '[:space:]')
+    if [[ $ami_info == *"finnish"* ]]; then
+        echo "Järjestelmänvalvoja"
+    elif [[ $ami_info == *"french"* ]]; then
+        echo "Administrateur"
+    elif [[ $ami_info == *"hungarian"* ]]; then
+        echo "Rendszergazda"
+    elif [[ $ami_info == *"portuguese"* ]]; then
+        echo "Administrador"
+    elif [[ $ami_info == *"russian"* ]]; then
+        echo "Администратор"
+    elif [[ $ami_info == *"spanish"* ]]; then
+        echo "Administrador"
+    elif [[ $ami_info == *"swedish"* ]]; then
+        echo "Administratör"
+    else
+        echo "Administrator"
+    fi
+}
+
+function get_host_default_user {
+    ami_platform=$1;shift
+    if [[ $ami_platform == windows ]]; then
+        _get_windows_default_user
+    elif [[ $ami_platform == linux ]]; then
+        _get_linux_default_user
     fi
 }
 
@@ -795,20 +825,22 @@ _dd_version_minor=$(echo $_dd_version | sed -e 's/[0-9]*\.//')
 _dd_version_major=$(echo $_dd_version | sed -e 's/\.[0-9.]*//')
 _dd_api_key=$(get_dd_api_key)
 _hostname="$(echo "$_instance_name" | sed -e 's/\./-/g')"
+_host_username=$(get_host_default_user "$_ami_platform")
+
+## Validate host user name
+if [[ -n $_host_username ]];then
+    echo "Default user for AMI $AMI_ID is likely: $_host_username"
+else
+    echo "Default user for AMI $AMI_ID not found!"
+    echo "Please check below AWS page"
+    echo "https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/managing-users.html#ami-default-user-names"
+    exit 1
+fi
 
 # Create uesr data script
 if [[ $_ami_platform != windows ]]; then
     echo "Datadog Agent for linux will be installed"
     # Check default user name for linux instance
-    _host_username=$(get_linux_default_user)
-    if [[ -n $_host_username ]];then
-        echo "Default user for AMI $AMI_ID is likely: $_host_username"
-    else
-        echo "Default user for AMI $AMI_ID not found!"
-        echo "Please check below AWS page"
-        echo "https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/managing-users.html#ami-default-user-names"
-        exit 1
-    fi
     if [[ "${RANDOM_LINUX_PASSWORD,,}" == "t"* ]] || [[ "${RANDOM_LINUX_PASSWORD,,}" == "y"* ]]; then
         _host_password=$(generate_random_password)
     else
@@ -816,8 +848,6 @@ if [[ $_ami_platform != windows ]]; then
     fi
     user_data=$(create_linux_user_data "$_dd_version_major" "$_dd_version_minor" "$_dd_api_key" "$_hostname" "$_host_username" "$_host_password")
 elif [[ $_ami_platform == windows ]]; then
-    # FIX ME: EU Windows may use different admin user name. For example French.
-    _host_username="Administrator"
     echo "Datadog Agent for windows will be installed"
     user_data=$(create_windows_user_data "$_dd_version" "$_dd_api_key")
 fi
@@ -871,7 +901,7 @@ elif [[ $_ami_platform == windows ]]; then
     _addr=$(is_rdp_available "${_addr_array[@]}")
     echo "RDP to $_addr is available now"
     _rdp_file=~/Downloads/${_hostname}-${_addr}.rdp
-    create_rdp_file "$_addr" "Administrator" "$_rdp_file"
+    create_rdp_file "$_addr" "$_host_username" "$_rdp_file"
     open ~/Downloads
 fi
 # Comment for avoiding unknown error
