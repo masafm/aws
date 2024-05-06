@@ -659,13 +659,20 @@ function _get_secret_1password {
     local ssh_key_name=$1;shift
     local secret_file
     if command -v op &> /dev/null;then
-        secret_file=$(mktemp)
+        local secret_file=$(mktemp)
         local keys=("private key")
         if [[ -n $(echo $LANG | grep -i ja_JP) ]];then
             keys=("秘密鍵" "${keys[@]}")
         fi
-        item_title=$(op item list --vault="Private" --format=json | python3 -c "import sys, json; print('\n'.join([item['title'] for item in json.load(sys.stdin)]))" | \
-                         _show_fzf "Select your 1Password item for ${ssh_key_name} ssh key pair" "false")
+        local item_list=$(op item list --vault="Private" --format=json | python3 -c "import sys, json; print('\n'.join([item['title'] for item in json.load(sys.stdin)]))")
+        for i in "$ssh_key_name" "${REGION}";do
+            local item_list_new=$(echo "$item_list" | grep -v "$i")
+            local item_list_grep=$(echo "$item_list" | grep "$i")
+            if [[ -n $item_list_grep ]];then
+                item_list=$(echo -e "${item_list_grep}\n${item_list_new}")
+            fi
+        done
+        local item_title=$(echo "$item_list" | _show_fzf "Select your 1Password item for ${ssh_key_name} ssh key pair" "false")
         if [[ -z $item_title ]];then
             return 1
         fi
