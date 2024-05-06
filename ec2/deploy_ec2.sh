@@ -430,7 +430,6 @@ function get_dd_version {
 function create_linux_user_data {
     local dd_version_major=$1;shift
     local dd_version_minor="DD_AGENT_MINOR_VERSION="$1;shift
-    local dd_api_key=$1;shift
     local hostname=$1;shift
     local username=$1;shift
     local password=$1;shift
@@ -440,12 +439,15 @@ echo "$username:$password" | sudo chpasswd
 sudo sh -c "echo \"$hostname\" >/etc/hostname"
 sudo sh -c "hostname \"$hostname\""
 sudo sh -c "echo '---------------------------------------------------------------------------'>>/etc/motd"
-sudo sh -c "echo 'Run tail -f /var/log/cloud-init-output.log for Datadog Agent install status' >> /etc/motd"
+sudo sh -c "echo 'Run tail -f /var/log/cloud-init-output.log for user script log' >> /etc/motd"
 sudo sh -c "echo '---------------------------------------------------------------------------'>>/etc/motd"
-# Install Datadog Agent
-DD_API_KEY=${dd_api_key} DD_SITE="${DD_SITE:-datadoghq.com}" ${dd_version_minor} bash -c "\$(curl -L https://s3.amazonaws.com/dd-agent/scripts/install_script_agent${dd_version_major}.sh)"
-# end
 EOF
+    if [[ -n "$DD_API_KEY" ]];then
+        cat <<EOF        
+# Install Datadog Agent
+DD_API_KEY=${DD_API_KEY} DD_SITE="${DD_SITE:-datadoghq.com}" ${dd_version_minor} bash -c "\$(curl -L https://s3.amazonaws.com/dd-agent/scripts/install_script_agent${dd_version_major}.sh)"
+EOF
+    fi
 }
 
 function generate_random_password {
@@ -455,7 +457,6 @@ function generate_random_password {
 
 function create_windows_user_data {
     local dd_version=$1;shift
-    local dd_api_key=$1;shift
     local dd_agentuser_pass="$(generate_random_password)"
     echo "DDAGENTUSER_PASSWORD is ${dd_agentuser_pass}"
     cat <<EOF
@@ -480,7 +481,9 @@ New-Item -Path \$filePath -ItemType File
 \$shortcut.Save()
 # Release the COM object
 [System.Runtime.InteropServices.Marshal]::ReleaseComObject(\$shell) | Out-Null
-
+EOF
+    if [[ -n "$DD_API_KEY" ]];then
+        cat <<EOF
 # Install Datadog Agent
 Write-Host "Start installing Datadog Agent"
 ${dd_version:+"\$version = \"$dd_version\""}
@@ -498,7 +501,7 @@ if (-not (Test-Path \$file)) {
     Write-Host "Download finished"
 }
 \$now = (Get-Date).ToString("yyyyMMddHHmmss")
-Start-Process -Wait msiexec -ArgumentList "/qn /log C:/\$file.\$now.log /i \$file DDAGENTUSER_NAME=.\\ddagentuser DDAGENTUSER_PASSWORD=${dd_agentuser_pass} SITE=${DD_SITE:-datadoghq.com} APIKEY=${dd_api_key}"
+Start-Process -Wait msiexec -ArgumentList "/qn /log C:/\$file.\$now.log /i \$file DDAGENTUSER_NAME=.\\ddagentuser DDAGENTUSER_PASSWORD=${dd_agentuser_pass} SITE=${DD_SITE:-datadoghq.com} APIKEY=${DD_API_KEY}"
 Write-Host "Datadog Agent has been installed successfully."
 
 # Add Datadog Agent/bin to PATH
@@ -523,7 +526,9 @@ Write-Host "End adding Datadog Agent/bin to PATH"
 \$shortcut.Save()
 # Release the COM object
 [System.Runtime.InteropServices.Marshal]::ReleaseComObject(\$shell) | Out-Null
-
+EOF
+    fi
+    cat <<EOF
 # Set the registry key to show file extensions in Windows Explorer
 Write-Host "Seting the registry key to show file extensions in Windows Explorer."
 \$registryPath = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced"
@@ -571,22 +576,6 @@ Remove-Item -Path \$filePath -Force
 Write-Host "User data script completed!"
 </powershell>
 EOF
-}
-
-function get_dd_api_key {
-    if [[ -n $DD_API_KEY ]];then
-        echo $DD_API_KEY
-    else
-        echo -n "Enter Datadog API key: " 1>&2
-        local dd_api_key
-        read dd_api_key
-        if [[ -z $dd_api_key ]];then
-            echo "API key is required!" 1>&2
-            exit 1
-        else
-            echo $dd_api_key
-        fi
-    fi
 }
 
 function deploy_ec2_instance {
@@ -827,10 +816,15 @@ else
     _sg_id=$(get_default_security_group "$SUBNET_ID")
 fi
 
-_dd_version=$(get_dd_version);[[ -z $_dd_version ]] && exit 1
-_dd_version_minor=$(echo $_dd_version | sed -e 's/[0-9]*\.//')
-_dd_version_major=$(echo $_dd_version | sed -e 's/\.[0-9.]*//')
-_dd_api_key=$(get_dd_api_key)
+_dd_version=""
+_dd_version_minor=""
+_dd_version_major=""
+if [[ -n "$DD_API_KEY" ]];then
+    _dd_version=$(get_dd_version);[[ -z $_dd_version ]] && exit 1
+    _dd_version_minor=$(echo $_dd_version | sed -e 's/[0-9]*\.//')
+    _dd_version_major=$(echo $_dd_version | sed -e 's/\.[0-9.]*//')
+    echo "Datadog Agent $_dd_version for $_ami_platform will be installed"
+fi
 _hostname="$(echo "$_instance_name" | sed -e 's/\./-/g')"
 _host_username=$(get_host_default_user "$_ami_platform")
 
@@ -846,17 +840,15 @@ fi
 
 # Create uesr data script
 if [[ $_ami_platform != windows ]]; then
-    echo "Datadog Agent for linux will be installed"
     # Check default user name for linux instance
     if [[ "${RANDOM_LINUX_PASSWORD,,}" == "t"* ]] || [[ "${RANDOM_LINUX_PASSWORD,,}" == "y"* ]]; then
         _host_password=$(generate_random_password)
     else
         _host_password="Datadog/4u"
     fi
-    user_data=$(create_linux_user_data "$_dd_version_major" "$_dd_version_minor" "$_dd_api_key" "$_hostname" "$_host_username" "$_host_password")
+    user_data=$(create_linux_user_data "$_dd_version_major" "$_dd_version_minor" "$_hostname" "$_host_username" "$_host_password")
 elif [[ $_ami_platform == windows ]]; then
-    echo "Datadog Agent for windows will be installed"
-    user_data=$(create_windows_user_data "$_dd_version" "$_dd_api_key")
+    user_data=$(create_windows_user_data "$_dd_version")
 fi
 
 # Deploy Instance
@@ -870,7 +862,7 @@ fi
 
 # Output the instance information
 echo "---------------------------------"
-echo "Datadog Agent version: ${_dd_version}"
+[[ -n "$DD_API_KEY" ]] && echo "Datadog Agent version: ${_dd_version}"
 echo "Instance name: ${_instance_name}"
 echo "Instance Type: ${INSTANCE_TYPE}"
 echo "Instance ID: ${instance_id}"
