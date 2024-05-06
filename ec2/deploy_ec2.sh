@@ -735,8 +735,10 @@ if ! command -v op &> /dev/null ;then
 fi
 
 # Reading default env variables
-if [ -f ~/.deploy_ec2.env ]; then
-    source ~/.deploy_ec2.env
+_env_file=~/.deploy_ec2.env
+if [ -f $_env_file ]; then
+    echo -e "\033[33mReading default env variables from $_env_file. Your command line env variables may be ignored.\033[0m"
+    source $_env_file
 fi
 
 # Global variables
