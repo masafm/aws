@@ -92,7 +92,7 @@ function select_region {
     echo $selected_region
 }
 
-function fetch_public_subnet_id {
+function fetch_public_subnet_ids {
     # Get the default VPC ID
     local default_vpc_id=$(aws ec2 describe-vpcs --filters "Name=is-default,Values=true" --query "Vpcs[0].VpcId" --output text 2>&1)
     echo "Default VPC ID: $default_vpc_id" >&2
@@ -413,15 +413,17 @@ function get_host_default_user {
 function get_dd_version {
     local dd_versions_url="https://ddagent-windows-stable.s3.amazonaws.com/installers_v2.json"
     local dd_versions=$(curl -L $dd_versions_url 2>/dev/null | \
-                            python3 -c "import sys, json, re; print('\n'.join([re.sub(r'-\d+$', '', key) for key in json.load(sys.stdin)['datadog-agent'].keys()]))" | \
+                            python3 -c "import sys, json, re; \
+                            print('\n'.join([re.sub(r'-\d+$', '', key) for key in json.load(sys.stdin)['datadog-agent'].keys()]))" | \
                             sort -r | \
                             grep -e '^[6-7]\.')
-    if [[ -n $VERSION_DATADOG ]];then
-        local dd_version_exists=$(echo "$dd_versions" | grep -e "^${VERSION_DATADOG}\$" || true)
+    if [[ -n $DATADOG_VERSION ]];then
+        local dd_version_exists=$(echo "$dd_versions" | grep -e "^${DATADOG_VERSION}\$" || true)
         if [[ -n $dd_version_exists ]];then
-            echo $VERSION_DATADOG
+            echo $DATADOG_VERSION
+            return
         else
-            echo -e "\033[0;31mInvalid Datadog Agent version: $VERSION_DATADOG\033[0m" 1>&2
+            echo -e "\033[0;31mInvalid Datadog Agent version: $DATADOG_VERSION\033[0m" 1>&2
         fi
     fi
     echo $(echo "$dd_versions" | _show_fzf "Select Datadog Agent version" "false")
@@ -635,7 +637,7 @@ function get_secret_local_file {
     local ssh_key_name=$1;shift
     local secret_file
     # Check for locally saved PEM files
-    secret_files=$(find ~ -maxdepth 3 -type f -name "${ssh_key_name}.pem")
+    secret_files=$(find ~ -maxdepth 3 -type f -name "*${ssh_key_name}*.pem")
     if [[ $(wc -l <<<$secret_files) -gt 1 ]];then
         secret_file=$(_show_fzf "Select your PEM file for ${ssh_key_name}" "false" <<<$secret_files)
     else
@@ -783,13 +785,13 @@ VOLUME_SIZE=${VOLUME_SIZE:-"100"}
 ## Instance Type
 INSTANCE_TYPE=${INSTANCE_TYPE:-"c5.xlarge"}
 ## Subnet ID
-SUBNET_ID=${SUBNET_ID:-$(fetch_public_subnet_id)}
+SUBNET_ID=${SUBNET_ID:-$(fetch_public_subnet_ids)}
 ## Security group ID
 SG_ID=${SG_ID:-""}
 ## Name of AWS ssh key pair
 SSH_KEY_PAIR_NAME=${SSH_KEY_PAIR_NAME:-""}
 ## Datadog Agent version
-VERSION_DATADOG=${VERSION_DATADOG:-""}
+DATADOG_VERSION=${DATADOG_VERSION:-""}
 ## Create new security group or update existing new security group(default: true)
 SG_CREATE=${SG_CREATE:-"true"}
 ## Include user-defined AMIs?
@@ -854,11 +856,16 @@ fi
 # Deploy Instance
 instance_id=$(deploy_ec2_instance "$_instance_name" "$_ssh_key_name" "$_sg_id")
 
+# Ctrl-c will stop witing for windows password generation
+set +e; trap 'echo -e "\nCtrl-C is pressed. Instance ${instance_id} already created.."' SIGINT
+# Wait for windows password generation, but can be skipped by ctrl-c.
 if [[ $_ami_platform == windows ]]; then
     secret_file=$(get_secret_file_path "$_ssh_key_name");[[ -z $secret_file ]] && exit 1
     echo "PEM file for Windows password decryption: $secret_file"
+    echo "You can skip waiting by ctrl-c"
     _host_password=$(get_windows_password $instance_id "$secret_file")
 fi
+set -e; trap - SIGINT # Ctrl-c will stop the script after this
 
 # Output the instance information
 echo "---------------------------------"
@@ -885,7 +892,9 @@ echo "---------------------------------"
 
 _addr_array=("$_host_private_ip" "$_host_public_ip")
 if [[ $_ami_platform != windows ]]; then
+    trap 'echo -n ""' SIGINT; set +e
     _addr=$(is_ssh_available "${_addr_array[@]}")
+    trap - SIGINT; set -e
     echo "SSH to $_addr is available now"
     _ssh_opts=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null)
     _ssh_cmd=(ssh "${_ssh_opts[@]}" "${_host_username}@${_addr}")
@@ -897,10 +906,16 @@ if [[ $_ami_platform != windows ]]; then
     echo "Command is in clipboard: $_cmd"
     echo -n $_cmd | pbcopy
 elif [[ $_ami_platform == windows ]]; then
+    trap 'echo ""' SIGINT; set +e
     _addr=$(is_rdp_available "${_addr_array[@]}")
+    trap - SIGINT; set -e
+    if [[ -z $_addr ]];then
+        exit 1
+    fi
     echo "RDP to $_addr is available now"
     _rdp_file=~/Downloads/${_hostname}-${_addr}.rdp
     create_rdp_file "$_addr" "$_host_username" "$_rdp_file"
     open ~/Downloads
 fi
+
 # Comment for avoiding unknown error
