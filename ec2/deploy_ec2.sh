@@ -316,6 +316,7 @@ function get_vpc_id {
 
 function ensure_security_group {
     local subnet_id=$1;shift
+    local user_name=$1;shift
     # Retrieve VPC ID from Subnet ID
     local vpc_id=$(get_vpc_id $subnet_id)
     local sg_name="${user_name}-${vpc_id}"
@@ -782,9 +783,9 @@ if [[ -n $SG_ID ]];then
     _sg_id=$SG_ID
 elif [[ "${SG_CREATE,,}" == "t"* ]] || [[ "${SG_CREATE,,}" == "y"* ]]; then
     # If user wanto to create a new security group
-    _sg_id=$(ensure_security_group $SUBNET_ID)
+    _sg_id=$(ensure_security_group "$SUBNET_ID" "$_user_name")
 else
-    _sg_id=$(get_default_security_group $SUBNET_ID)
+    _sg_id=$(get_default_security_group "$SUBNET_ID")
 fi
 
 _dd_version=$(get_dd_version);[[ -z $_dd_version ]] && exit 1
