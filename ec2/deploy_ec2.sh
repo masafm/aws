@@ -92,7 +92,7 @@ function select_region {
     echo $selected_region
 }
 
-function fetch_public_subnet_ids {
+function fetch_public_subnet_id {
     # Get the default VPC ID
     local default_vpc_id=$(aws ec2 describe-vpcs --filters "Name=is-default,Values=true" --query "Vpcs[0].VpcId" --output text 2>&1)
     echo "Default VPC ID: $default_vpc_id" >&2
@@ -783,7 +783,7 @@ VOLUME_SIZE=${VOLUME_SIZE:-"100"}
 ## Instance Type
 INSTANCE_TYPE=${INSTANCE_TYPE:-"c5.xlarge"}
 ## Subnet ID
-SUBNET_ID=${SUBNET_ID:-$(fetch_public_subnet_ids)}
+SUBNET_ID=${SUBNET_ID:-$(fetch_public_subnet_id)}
 ## Security group ID
 SG_ID=${SG_ID:-""}
 ## Name of AWS ssh key pair
