@@ -292,6 +292,7 @@ function get_current_aws_user {
 }
 
 function get_ssh_key {
+    local user_name=$1;shift
     # Get SSH key pair name
     if [[ -n $SSH_KEY_PAIR_NAME ]];then
         echo $SSH_KEY_PAIR_NAME
@@ -315,9 +316,12 @@ function get_vpc_id {
 
 function ensure_security_group {
     local subnet_id=$1;shift
+    # Retrieve VPC ID from Subnet ID
     local vpc_id=$(get_vpc_id $subnet_id)
     local sg_name="${user_name}-${vpc_id}"
-    
+    # Retrieve my public IP address
+    local my_ip=$(curl -s https://checkip.amazonaws.com)
+
     # Check if the security group already exists
     local sg_id=$(aws ec2 describe-security-groups \
                    --filters Name=vpc-id,Values="$vpc_id" Name=group-name,Values="$sg_name" \
@@ -396,10 +400,12 @@ function create_linux_user_data {
     local dd_version_major=$1;shift
     local dd_version_minor="DD_AGENT_MINOR_VERSION="$1;shift
     local dd_api_key=$1;shift
+    local hostname=$1;shift
+    local username=$1;shift
     local password=$1;shift
     cat <<EOF
 #!/bin/bash -x
-echo "$default_user:$password" | sudo chpasswd
+echo "$username:$password" | sudo chpasswd
 sudo sh -c "echo \"$hostname\" >/etc/hostname"
 sudo sh -c "hostname \"$hostname\""
 sudo sh -c "echo '---------------------------------------------------------------------------'>>/etc/motd"
@@ -418,6 +424,7 @@ function generate_random_password {
 
 function create_windows_user_data {
     local dd_version=$1;shift
+    local dd_api_key=$1;shift
     local dd_agentuser_pass="$(generate_random_password)"
     echo "DDAGENTUSER_PASSWORD is ${dd_agentuser_pass}"
     cat <<EOF
@@ -531,7 +538,6 @@ New-Item -Path \$filePath -ItemType File
 Remove-Item -Path \$filePath -Force
 
 Write-Host "User data script completed!"
-
 </powershell>
 EOF
 }
@@ -709,6 +715,8 @@ function get_instance_name {
 }
 
 # main function
+# All variables in uppercase are global variables, and variables starting with an underscore are local variables.
+#
 # Exit if aws command is not working
 if ! aws sts get-caller-identity >/dev/null 2>&1;then
     echo "AWS command is not working. Exiting..."
@@ -762,38 +770,36 @@ RANDOM_LINUX_PASSWORD=${RANDOM_LINUX_PASSWORD:-"true"}
 set -o nounset # Don't accept undefined variables
 
 # Retrieve the username
-user_name=$(get_current_aws_user)
-# Retrieve my public IP address
-my_ip=$(curl -s https://checkip.amazonaws.com)
-ami_platform=$(determine_os_platform)
-echo "The AMI ID $AMI_ID platform is ${ami_platform}."
-ssh_key_name=$(get_ssh_key);[[ -z $ssh_key_name ]] && exit 1
-timestamp=$(date +%Y%m%d-%H%M%S)
+_user_name=$(get_current_aws_user)
+_ami_platform=$(determine_os_platform)
+echo "The AMI ID $AMI_ID platform is ${_ami_platform}."
+_ssh_key_name=$(get_ssh_key "$_user_name");[[ -z $_ssh_key_name ]] && exit 1
+_datetime=$(date +%Y%m%d-%H%M%S)
 # Set the instance name based on the username
-instance_name=$(get_instance_name "${user_name}-${ami_platform}-${timestamp}")
+_instance_name=$(get_instance_name "${_user_name}-${_ami_platform}-${_datetime}")
 
 if [[ -n $SG_ID ]];then
-    sg_id=$SG_ID
+    _sg_id=$SG_ID
 elif [[ "${SG_CREATE,,}" == "t"* ]] || [[ "${SG_CREATE,,}" == "y"* ]]; then
     # If user wanto to create a new security group
-    sg_id=$(ensure_security_group $SUBNET_ID)
+    _sg_id=$(ensure_security_group $SUBNET_ID)
 else
-    sg_id=$(get_default_security_group $SUBNET_ID)
+    _sg_id=$(get_default_security_group $SUBNET_ID)
 fi
 
-dd_version=$(get_dd_version);[[ -z $dd_version ]] && exit 1
-dd_version_minor=$(echo $dd_version | sed -e 's/[0-9]*\.//')
-dd_version_major=$(echo $dd_version | sed -e 's/\.[0-9.]*//')
-dd_api_key=$(get_dd_api_key)
-hostname="$(echo "$instance_name" | sed -e 's/\./-/g')"
+_dd_version=$(get_dd_version);[[ -z $_dd_version ]] && exit 1
+_dd_version_minor=$(echo $_dd_version | sed -e 's/[0-9]*\.//')
+_dd_version_major=$(echo $_dd_version | sed -e 's/\.[0-9.]*//')
+_dd_api_key=$(get_dd_api_key)
+_hostname="$(echo "$_instance_name" | sed -e 's/\./-/g')"
 
 # Create uesr data script
-if [[ $ami_platform != windows ]]; then
+if [[ $_ami_platform != windows ]]; then
     echo "Datadog Agent for linux will be installed"
     # Check default user name for linux instance
-    default_user=$(get_linux_default_user)
-    if [[ -n $default_user ]];then
-        echo "Default user for AMI $AMI_ID is likely: $default_user"
+    _host_username=$(get_linux_default_user)
+    if [[ -n $_host_username ]];then
+        echo "Default user for AMI $AMI_ID is likely: $_host_username"
     else
         echo "Default user for AMI $AMI_ID not found!"
         echo "Please check below AWS page"
@@ -801,68 +807,68 @@ if [[ $ami_platform != windows ]]; then
         exit 1
     fi
     if [[ "${RANDOM_LINUX_PASSWORD,,}" == "t"* ]] || [[ "${RANDOM_LINUX_PASSWORD,,}" == "y"* ]]; then
-        password_host=$(generate_random_password)
+        _host_password=$(generate_random_password)
     else
-        password_host="Datadog/4u"
+        _host_password="Datadog/4u"
     fi
-    user_data=$(create_linux_user_data "$dd_version_major" "$dd_version_minor" "$dd_api_key" "$password_host")
-elif [[ $ami_platform == windows ]]; then
+    user_data=$(create_linux_user_data "$_dd_version_major" "$_dd_version_minor" "$_dd_api_key" "$_hostname" "$_host_username" "$_host_password")
+elif [[ $_ami_platform == windows ]]; then
     # FIX ME: EU Windows may use different admin user name. For example French.
-    default_user="Administrator"
+    _host_username="Administrator"
     echo "Datadog Agent for windows will be installed"
-    user_data=$(create_windows_user_data $dd_version)
+    user_data=$(create_windows_user_data "$_dd_version" "$_dd_api_key")
 fi
 
 # Deploy Instance
-instance_id=$(deploy_ec2_instance "$instance_name" "$ssh_key_name" "$sg_id")
+instance_id=$(deploy_ec2_instance "$_instance_name" "$_ssh_key_name" "$_sg_id")
 
-if [[ $ami_platform == windows ]]; then
-    secret_file=$(get_secret_file_path "$ssh_key_name");[[ -z $secret_file ]] && exit 1
+if [[ $_ami_platform == windows ]]; then
+    secret_file=$(get_secret_file_path "$_ssh_key_name");[[ -z $secret_file ]] && exit 1
     echo "PEM file for Windows password decryption: $secret_file"
-    password_host=$(get_windows_password $instance_id "$secret_file")
+    _host_password=$(get_windows_password $instance_id "$secret_file")
 fi
 
 # Output the instance information
 echo "---------------------------------"
-echo "Datadog Agent version: ${dd_version}"
-echo "Instance name: ${instance_name}"
+echo "Datadog Agent version: ${_dd_version}"
+echo "Instance name: ${_instance_name}"
 echo "Instance Type: ${INSTANCE_TYPE}"
 echo "Instance ID: ${instance_id}"
 echo "VPC ID: $(get_vpc_id $SUBNET_ID)"
 echo "Subnet ID: ${SUBNET_ID}"
-echo "Security Group ID: ${sg_id}"
+echo "Security Group ID: ${_sg_id}"
 echo "AMI ID: ${AMI_ID}"
 echo "AMI Description: $(get_ami_description)"
-echo "AMI Platform: $ami_platform"
-private_ip=$(get_private_ip $instance_id)
-public_ip=$(get_public_ip $instance_id)
-[[ -n $private_ip ]] && echo "Private IP: $private_ip"
-[[ -n $public_ip ]] && echo "Public IP: $public_ip"
-echo "User Name: $default_user"
-echo "Password: ${password_host}"
+echo "AMI Platform: $_ami_platform"
+_host_private_ip=$(get_private_ip $instance_id)
+_host_public_ip=$(get_public_ip $instance_id)
+[[ -n $_host_private_ip ]] && echo "Private IP: $_host_private_ip"
+[[ -n $_host_public_ip ]] && echo "Public IP: $_host_public_ip"
+echo "User Name: $_host_username"
+echo "Password: ${_host_password}"
 # Copy password to clipboard
-echo -n "${password_host}" | pbcopy
+echo -n "${_host_password}" | pbcopy
 echo "URL: https://${REGION}.console.aws.amazon.com/ec2/home?region=${REGION}#InstanceDetails:instanceId=${instance_id}"
 echo "---------------------------------"
 
-addr_array=("$private_ip" "$public_ip")
-if [[ $ami_platform != windows ]]; then
-    addr=$(is_ssh_available "${addr_array[@]}")
-    echo "SSH to $addr is available now"
-    ssh_opts=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null)
-    ssh_cmd=(ssh "${ssh_opts[@]}" "${default_user}@${addr}")
-    secret_file=$(get_secret_local_file "$ssh_key_name")
-    if [[ -n $secret_file ]]; then
-        ssh_cmd+=(-i \"$secret_file\")
+_addr_array=("$_host_private_ip" "$_host_public_ip")
+if [[ $_ami_platform != windows ]]; then
+    _addr=$(is_ssh_available "${_addr_array[@]}")
+    echo "SSH to $_addr is available now"
+    _ssh_opts=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null)
+    _ssh_cmd=(ssh "${_ssh_opts[@]}" "${_host_username}@${_addr}")
+    _secret_file=$(get_secret_local_file "$_ssh_key_name")
+    if [[ -n $_secret_file ]]; then
+        _ssh_cmd+=(-i \"$_secret_file\")
     fi
-    cmd="${ssh_cmd[@]}"
-    echo "Command is in clipboard: $cmd"
-    echo -n $cmd | pbcopy
-elif [[ $ami_platform == windows ]]; then
-    addr=$(is_rdp_available "${addr_array[@]}")
-    echo "RDP to $addr is available now"
-    rdp_file=~/Downloads/${hostname}-${addr}.rdp
-    create_rdp_file "$addr" "Administrator" "$rdp_file"
+    _cmd="${_ssh_cmd[@]}"
+    echo "Command is in clipboard: $_cmd"
+    echo -n $_cmd | pbcopy
+elif [[ $_ami_platform == windows ]]; then
+    _addr=$(is_rdp_available "${_addr_array[@]}")
+    echo "RDP to $_addr is available now"
+    _rdp_file=~/Downloads/${_hostname}-${_addr}.rdp
+    create_rdp_file "$_addr" "Administrator" "$_rdp_file"
     open ~/Downloads
 fi
 # Comment for avoiding unknown error
