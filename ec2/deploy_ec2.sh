@@ -20,7 +20,8 @@ function _show_fzf {
 
     echo -e "\033[0;33m${title}\033[0m" >&2
     # Execute fzf with the calculated height
-    if [[ -z $full_screen ]] || [[ "${full_screen,,}" == "f"* ]] || [[ "${full_screen,,}" == "n"* ]];then
+    full_screen=$(echo "$full_screen" | tr '[:upper:]' '[:lower:]')
+    if [[ -z $full_screen ]] || [[ "${full_screen}" == "f"* ]] || [[ "${full_screen}" == "n"* ]];then
         opt_height="--height $actual_height"
     fi
     local selected_line=$(echo "$input" | fzf $opt_height --header "$title")
@@ -118,7 +119,8 @@ function fetch_public_subnet_ids {
     local shuffled_ids=($(shuf -e "${subnet_ids[@]}"))
     for subnet_id in "${shuffled_ids[@]}"; do
         local is_public=$(aws ec2 describe-subnets --subnet-ids "$subnet_id" --query 'Subnets[].MapPublicIpOnLaunch' --output text 2>&1)
-        if [[ "${is_public,,}" == "true" ]]; then
+        is_public=$(echo "$is_public" | tr '[:upper:]' '[:lower:]')
+        if [[ "${is_public}" == "t"* ]]; then
             echo "Using subnet: $subnet_id" >&2
             echo "$subnet_id"
             break
@@ -131,7 +133,10 @@ function is_cache_valid {
     # Check if cache file exists
     [[ -f "$cache_file" ]] || return 1  
     # Get last modified time of the cache file
-    local last_modified=$(stat -c %Y "$cache_file")
+    local last_modified=$(stat -c %Y "$cache_file" 2>/dev/null)
+    if [[ -z $last_modified ]];then
+        last_modified=$(stat -f '%m' "$cache_file" 2>/dev/null)
+    fi
     # Get current time
     local current_time=$(date +%s)
     # Calculate elapsed time since last modified
@@ -171,7 +176,7 @@ function search_amis {
 
     # Fetch AMI information for each owner ID
     local amis_file_path
-    if is_cache_valid "$cache_file" && [[ "${NO_CACHE,,}" == "f"* || "${NO_CACHE,,}" == "n"* ]]; then
+    if is_cache_valid "$cache_file" && [[ "${NO_CACHE}" == "f"* || "${NO_CACHE}" == "n"* ]]; then
         amis_file_path="$cache_file"
         echo "Using cache file for Amazon AMI..." >&2        
     else
@@ -183,7 +188,7 @@ function search_amis {
     
     # Fetch user-defined AMIs
     touch "$temp_dir/user_defined_amis"
-    if [[ "${INCLUDE_USER_DEF_AMIS,,}" == "t"* ]] || [[ "${INCLUDE_USER_DEF_AMIS,,}" == "y"* ]]; then
+    if [[ "${INCLUDE_USER_DEF_AMIS}" == "t"* ]] || [[ "${INCLUDE_USER_DEF_AMIS}" == "y"* ]]; then
         temp_file="$temp_dir/user_defined_amis"
         echo "Fetching user-defined AMIs..." >&2
         (aws ec2 describe-images --owners "$owner_id" --query "Images[*].[ImageId,Name,Description]" --output text > "$temp_file") &
@@ -776,6 +781,8 @@ NO_CACHE=${NO_CACHE:-"false"}
 ## AWS region
 REGION=${REGION:-$(select_region)};[[ -z $REGION ]] && exit 1
 AWS_REGION=$REGION
+## Datadog API key
+DD_API_KEY=${DD_API_KEY:-""}
 ## Amazon AMI cache list expire second
 AMI_LIST_CACHE_EXPIRE=${AMI_LIST_CACHE_EXPIRE:-$((24 * 3600 * 30))}
 ## Amazon machine image ID
@@ -811,7 +818,7 @@ _instance_name=$(get_instance_name "${_user_name}-${_ami_platform}-${_datetime}"
 
 if [[ -n $SG_ID ]];then
     _sg_id=$SG_ID
-elif [[ "${SG_CREATE,,}" == "t"* ]] || [[ "${SG_CREATE,,}" == "y"* ]]; then
+elif [[ "${SG_CREATE}" == "t"* ]] || [[ "${SG_CREATE}" == "y"* ]]; then
     # If user wanto to create a new security group
     _sg_id=$(ensure_security_group "$SUBNET_ID" "$_user_name")
 else
@@ -843,7 +850,7 @@ fi
 # Create uesr data script
 if [[ $_ami_platform != windows ]]; then
     # Check default user name for linux instance
-    if [[ "${RANDOM_LINUX_PASSWORD,,}" == "t"* ]] || [[ "${RANDOM_LINUX_PASSWORD,,}" == "y"* ]]; then
+    if [[ "${RANDOM_LINUX_PASSWORD}" == "t"* ]] || [[ "${RANDOM_LINUX_PASSWORD}" == "y"* ]]; then
         _host_password=$(generate_random_password)
     else
         _host_password="Datadog/4u"
