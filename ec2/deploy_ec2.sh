@@ -645,7 +645,7 @@ function get_secret_local_file {
 
     while IFS= read -r -d '' file; do
         secret_files+=("$file")
-    done < <(find ~ -maxdepth 3 -type f -name "*${ssh_key_name}*.pem" -print0)
+    done < <(find ~ -maxdepth 3 -type f -iname "*${ssh_key_name}*.pem" -print0)
 
     if [[ "${#secret_files[@]}" -gt 1 ]]; then
         secret_file=$(printf "%s\n" "${secret_files[@]}" | _show_fzf "Select your PEM file for ${ssh_key_name}" "false")
