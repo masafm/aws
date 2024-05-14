@@ -642,7 +642,7 @@ function get_secret_local_file {
     local ssh_key_name=$1;shift
     local secret_file
     # Check for locally saved PEM files
-    secret_files=$(find ~ -maxdepth 3 -type f -name "*${ssh_key_name}*.pem 2>/dev/null")
+    secret_files=$(find ~ -maxdepth 3 -type f -name "*${ssh_key_name}*.pem" 2>/dev/null)
     if [[ $(wc -l <<<$secret_files) -gt 1 ]];then
         secret_file=$(_show_fzf "Select your PEM file for ${ssh_key_name}" "false" <<<$secret_files)
     else
