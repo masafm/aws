@@ -788,7 +788,7 @@ AMI_ID=${AMI_ID:-$(search_amis)};[[ -z $AMI_ID ]] && exit 1
 ## Volume size of root volume
 VOLUME_SIZE=${VOLUME_SIZE:-"100"}
 ## Instance Type
-INSTANCE_TYPE=${INSTANCE_TYPE:-"c5.xlarge"}
+INSTANCE_TYPE=${INSTANCE_TYPE:-"t2.large"}
 ## Subnet ID
 SUBNET_ID=${SUBNET_ID:-$(fetch_public_subnet_ids)}
 ## Security group ID
