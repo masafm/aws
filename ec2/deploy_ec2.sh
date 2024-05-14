@@ -675,7 +675,7 @@ function _get_secret_1password {
                 sed -e 's/"//g' \
                     -e 's/BEGIN PRIVATE KEY/BEGIN RSA PRIVATE KEY/' \
                     -e 's/END PRIVATE KEY/END RSA PRIVATE KEY/' \
-                    -e '/^[[:space:]]*$/d' >$secret_file
+                    -e '/^[[:space:]]*$/d' >$secret_file 2>/dev/null
             if [[ -n $(grep "BEGIN OPENSSH PRIVATE KEY" "$secret_file") ]];then
                 ssh-keygen -p -f "$secret_file" -m PEM -N "" >/dev/null 2>&1
             fi
