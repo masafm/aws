@@ -642,9 +642,13 @@ function get_secret_local_file {
     local ssh_key_name=$1;shift
     local secret_file
     # Check for locally saved PEM files
-    secret_files=$(find ~ -maxdepth 3 -type f -name "*${ssh_key_name}*.pem" 2>/dev/null)
-    if [[ $(wc -l <<<$secret_files) -gt 1 ]];then
-        secret_file=$(_show_fzf "Select your PEM file for ${ssh_key_name}" "false" <<<$secret_files)
+    # Set IFS to the null character and read the output of find in a while loop
+    secret_files=() # Initialize the array
+    while IFS= read -r -d '' file; do
+        secret_files+=("$file") # Add the filename to the array
+    done < <(find ~ -maxdepth 3 -type f -name "*${ssh_key_name}*.pem" 2>/dev/null -print0)
+    if [[ "${#secret_files[@]}" -gt 1 ]];then
+        secret_file=$(printf "%s\n" "${secret_files[@]}" | _show_fzf "Select your PEM file for ${ssh_key_name}" "false")
     else
         secret_file=$secret_files
     fi
