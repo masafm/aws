@@ -639,18 +639,20 @@ function get_windows_password {
 }
 
 function get_secret_local_file {
-    local ssh_key_name=$1;shift
+    local ssh_key_name=$1; shift
     local secret_file
-    # Check for locally saved PEM files
-    # Set IFS to the null character and read the output of find in a while loop
-    local secret_files=() # Initialize the array
+    local secret_files=()
+
     while IFS= read -r -d '' file; do
-        secret_files+=("$file") # Add the filename to the array
-    done < <(find ~ -maxdepth 3 -type f -name "*${ssh_key_name}*.pem" 2>/dev/null -print0)
-    if [[ "${#secret_files[@]}" -gt 1 ]];then
+        secret_files+=("$file")
+    done < <(find ~ -maxdepth 3 -type f -name "*${ssh_key_name}*.pem" -print0)
+
+    if [[ "${#secret_files[@]}" -gt 1 ]]; then
         secret_file=$(printf "%s\n" "${secret_files[@]}" | _show_fzf "Select your PEM file for ${ssh_key_name}" "false")
+    elif [[ "${#secret_files[@]}" == 1 ]]; then
+        secret_file=${secret_files[0]}
     else
-        secret_file=$secret_files
+        secret_file=""
     fi
     echo $secret_file
 }
