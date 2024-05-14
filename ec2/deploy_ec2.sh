@@ -657,9 +657,7 @@ function _get_secret_1password {
     if command -v op &> /dev/null;then
         local secret_file=$(mktemp)
         local keys=("private key")
-        if [[ -n $(echo $LANG | grep -i ja_JP) ]];then
-            keys=("秘密鍵" "${keys[@]}")
-        fi
+        keys=("秘密鍵" "${keys[@]}")
         local item_list=$(op item list --vault="Private" --format=json | python3 -c "import sys, json; print('\n'.join([item['title'] for item in json.load(sys.stdin)]))")
         for i in "$ssh_key_name" "${REGION}";do
             local item_list_new=$(echo "$item_list" | grep -v "$i")
