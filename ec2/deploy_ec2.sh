@@ -116,8 +116,8 @@ function fetch_public_subnet_ids {
     echo "Subnet IDs with auto-assign public IPv4: ${subnet_ids[*]}" >&2
 
     # Shuffle subnet IDs and process each one
-    local shuffled_ids=($(shuf -e "${subnet_ids[@]}"))
-    for subnet_id in "${shuffled_ids[@]}"; do
+    #local shuffled_ids=($(shuf -e "${subnet_ids[@]}"))
+    for subnet_id in "${subnet_ids[@]}"; do
         local is_public=$(aws ec2 describe-subnets --subnet-ids "$subnet_id" --query 'Subnets[].MapPublicIpOnLaunch' --output text 2>&1)
         is_public=$(echo "$is_public" | tr '[:upper:]' '[:lower:]')
         if [[ "${is_public}" == "t"* ]]; then
