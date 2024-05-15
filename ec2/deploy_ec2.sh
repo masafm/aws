@@ -758,17 +758,37 @@ function get_instance_name {
 # Exit if aws command is not working
 if ! aws sts get-caller-identity >/dev/null 2>&1;then
     echo "AWS command is not working. Exiting..."
+    echo 'Pleae make sure "aws sts get-caller-identity" returns value.'
     exit 1
 fi
 # Install fzf command if not installed
-if ! command -v fzf &> /dev/null ;then
-    echo "fzf command is required. Installing it."
-    brew update && brew install fzf
+if ! command -v fzf &> /dev/null; then
+    printf "fzf command is required but not installed. Install it? [Y/n]: "
+    read -r response
+    case "$response" in
+        [Yy]|[Yy][Ee][Ss])
+            echo "Installing fzf..."
+            brew update && brew install fzf
+            ;;
+        *)
+            echo "Installation aborted."
+            exit 1
+            ;;
+    esac
 fi
 # Install op command if not installed
-if ! command -v op &> /dev/null ;then
-    echo "op command is required. Installing it."
-    brew update && brew install 1password-cli
+if ! command -v op &> /dev/null; then
+    printf "op command (1Password CLI) is optional and not installed. Install it? [Y/n]: "
+    read -r response
+    case "$response" in
+        [Yy]|[Yy][Ee][Ss])
+            echo "Installing 1Password CLI..."
+            brew update && brew install 1password-cli
+            ;;
+        *)
+            echo "Proceeding without 1Password CLI, you won't be able select keys from 1Password"
+            ;;
+    esac
 fi
 
 # Reading default env variables
@@ -794,7 +814,7 @@ AMI_ID=${AMI_ID:-$(search_amis)};[[ -z $AMI_ID ]] && exit 1
 ## Volume size of root volume
 VOLUME_SIZE=${VOLUME_SIZE:-"100"}
 ## Instance Type
-INSTANCE_TYPE=${INSTANCE_TYPE:-"t2.large"}
+INSTANCE_TYPE=${INSTANCE_TYPE:-"t3.large"}
 ## Subnet ID
 SUBNET_ID=${SUBNET_ID:-$(fetch_public_subnet_ids)}
 ## Security group ID
