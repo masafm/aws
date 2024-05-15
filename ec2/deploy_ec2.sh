@@ -803,19 +803,21 @@ fi
 
 # Global variables
 set +o nounset # Accept undefined variables
-printf "Do you want AppGate connection instance in us-east-1? [y/N]: "
-_response="no"
-read -r _response
-case "$_response" in
-    [Yy]|[Yy][Ee][Ss])
-        REGION=us-east-1
-        SUBNET_ID=subnet-b89e00e2
-        SG_ID=sg-0348948a9f025a14e
-        SG_CREATE=false
-        ;;
-    *)
-        ;;
-esac
+if [[ -z $REGION && -z $SUBNET_ID && -z $SG_ID -z && $SG_CREATE ]];then
+    printf "Do you want AppGate connection instance in us-east-1? [y/N]: "
+    _response="no"
+    read -r _response
+    case "$_response" in
+        [Yy]|[Yy][Ee][Ss])
+            REGION=us-east-1
+            SUBNET_ID=subnet-b89e00e2
+            SG_ID=sg-0348948a9f025a14e
+            SG_CREATE=false
+            ;;
+        *)
+            ;;
+    esac
+fi
 ## Disable any kind of caching
 NO_CACHE=${NO_CACHE:-"false"}
 ## AWS region
