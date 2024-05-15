@@ -763,9 +763,10 @@ if ! aws sts get-caller-identity >/dev/null 2>&1;then
 fi
 # Install fzf command if not installed
 if ! command -v fzf &> /dev/null; then
+    _response="yes"
     printf "fzf command is required but not installed. Install it? [Y/n]: "
-    read -r response
-    case "$response" in
+    read -r _response
+    case "$_response" in
         [Yy]|[Yy][Ee][Ss])
             echo "Installing fzf..."
             brew update && brew install fzf
@@ -779,8 +780,9 @@ fi
 # Install op command if not installed
 if ! command -v op &> /dev/null; then
     printf "op command (1Password CLI) is optional and not installed. Install it? [Y/n]: "
-    read -r response
-    case "$response" in
+    _response="yes"
+    read -r _response
+    case "$_response" in
         [Yy]|[Yy][Ee][Ss])
             echo "Installing 1Password CLI..."
             brew update && brew install 1password-cli
@@ -798,8 +800,22 @@ if [ -f $_env_file ]; then
     source $_env_file
 fi
 
+
 # Global variables
 set +o nounset # Accept undefined variables
+printf "Do you want AppGate connection instance in us-east-1? [y/N]: "
+_response="no"
+read -r _response
+case "$_response" in
+    [Yy]|[Yy][Ee][Ss])
+        REGION=us-east-1
+        SUBNET_ID=subnet-b89e00e2
+        SG_ID=sg-0348948a9f025a14e
+        SG_CREATE=false
+        ;;
+    *)
+        ;;
+esac
 ## Disable any kind of caching
 NO_CACHE=${NO_CACHE:-"false"}
 ## AWS region
@@ -926,27 +942,32 @@ if [[ $_ami_platform != windows ]]; then
     trap 'echo -n ""' SIGINT; set +e
     _addr=$(is_ssh_available "${_addr_array[@]}")
     trap - SIGINT; set -e
-    echo "SSH to $_addr is available now"
-    _ssh_opts=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null)
-    _ssh_cmd=(ssh "${_ssh_opts[@]}" "${_host_username}@${_addr}")
-    _secret_file=$(get_secret_local_file "$_ssh_key_name")
-    if [[ -n $_secret_file ]]; then
-        _ssh_cmd+=(-i \"$_secret_file\")
+    if [[ -n $_addr ]];then
+        echo "SSH to $_addr is available now"
+        _ssh_opts=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null)
+        _ssh_cmd=(ssh "${_ssh_opts[@]}" "${_host_username}@${_addr}")
+        _secret_file=$(get_secret_local_file "$_ssh_key_name")
+        if [[ -n $_secret_file ]]; then
+            _ssh_cmd+=(-i \"$_secret_file\")
+        fi
+        _cmd="${_ssh_cmd[@]}"
+        echo "Command is in clipboard: $_cmd"
+        echo -n $_cmd | pbcopy
+    else
+        echo -e "\033[31mFailed to establish connectivity with the target host on port 22.\033[0m"
     fi
-    _cmd="${_ssh_cmd[@]}"
-    echo "Command is in clipboard: $_cmd"
-    echo -n $_cmd | pbcopy
 elif [[ $_ami_platform == windows ]]; then
     trap 'echo ""' SIGINT; set +e
     _addr=$(is_rdp_available "${_addr_array[@]}")
     trap - SIGINT; set -e
-    if [[ -z $_addr ]];then
-        exit 1
-    fi
-    echo "RDP to $_addr is available now"
-    _rdp_file=~/Downloads/${_hostname}-${_addr}.rdp
-    create_rdp_file "$_addr" "$_host_username" "$_rdp_file"
-    open ~/Downloads
+    if [[ -n $_addr ]];then
+        echo "RDP to $_addr is available now"
+        _rdp_file=~/Downloads/${_hostname}-${_addr}.rdp
+        create_rdp_file "$_addr" "$_host_username" "$_rdp_file"
+        open ~/Downloads
+    else
+        echo -e "\033[31mFailed to establish connectivity with the target host on port 22.\033[0m"
+    fi        
 fi
 
 # Comment for avoiding unknown error
