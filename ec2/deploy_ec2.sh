@@ -803,7 +803,7 @@ fi
 
 # Global variables
 set +o nounset # Accept undefined variables
-if [[ -z $REGION && -z $SUBNET_ID && -z $SG_ID -z && $SG_CREATE ]];then
+if [[ -z $REGION && -z $SUBNET_ID && -z $SG_ID && -z $SG_CREATE ]];then
     printf "Do you want AppGate connection instance in us-east-1? [y/N]: "
     _response="no"
     read -r _response
