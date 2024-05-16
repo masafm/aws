@@ -442,7 +442,13 @@ function create_linux_user_data {
     local password=$1;shift
     cat <<EOF
 #!/bin/bash -x
+EOF
+    if [[ "${CHANGE_LINUX_PASSWORD}" == "t"* ]] || [[ "${CHANGE_LINUX_PASSWORD}" == "y"* ]]; then
+        cat <<EOF
 echo "$username:$password" | sudo chpasswd
+EOF
+    fi
+    cat <<EOF
 sudo sh -c "echo \"$hostname\" >/etc/hostname"
 sudo sh -c "hostname \"$hostname\""
 sudo sh -c "echo '---------------------------------------------------------------------------'>>/etc/motd"
@@ -847,6 +853,8 @@ SG_CREATE=${SG_CREATE:-"true"}
 INCLUDE_USER_DEF_AMIS=${INCLUDE_USER_DEF_AMIS:-"false"}
 ## Password for linux will be Datadog/4u if this is ture/yes
 RANDOM_LINUX_PASSWORD=${RANDOM_LINUX_PASSWORD:-"true"}
+## Passowrd for linux default user is changed
+CHANGE_LINUX_PASSWORD=${CHANGE_LINUX_PASSWORD:-"false"}
 set -o nounset # Don't accept undefined variables
 
 # Retrieve the username
@@ -891,11 +899,14 @@ fi
 
 # Create uesr data script
 if [[ $_ami_platform != windows ]]; then
-    # Check default user name for linux instance
-    if [[ "${RANDOM_LINUX_PASSWORD}" == "t"* ]] || [[ "${RANDOM_LINUX_PASSWORD}" == "y"* ]]; then
-        _host_password=$(generate_random_password)
-    else
-        _host_password="Datadog/4u"
+    # Change linux default user password if required
+    _host_password=""
+    if [[ "${CHANGE_LINUX_PASSWORD}" == "t"* ]] || [[ "${CHANGE_LINUX_PASSWORD}" == "y"* ]]; then
+        if [[ "${RANDOM_LINUX_PASSWORD}" == "t"* ]] || [[ "${RANDOM_LINUX_PASSWORD}" == "y"* ]]; then
+            _host_password=$(generate_random_password)
+        else
+            _host_password="Datadog/4u"
+        fi
     fi
     user_data=$(create_linux_user_data "$_dd_version_major" "$_dd_version_minor" "$_hostname" "$_host_username" "$_host_password")
 elif [[ $_ami_platform == windows ]]; then
@@ -933,7 +944,7 @@ _host_public_ip=$(get_public_ip $instance_id)
 [[ -n $_host_private_ip ]] && echo "Private IP: $_host_private_ip"
 [[ -n $_host_public_ip ]] && echo "Public IP: $_host_public_ip"
 echo "User Name: $_host_username"
-echo "Password: ${_host_password}"
+echo "Password: ${_host_password:-N/A}"
 # Copy password to clipboard
 echo -n "${_host_password}" | pbcopy
 echo "URL: https://${REGION}.console.aws.amazon.com/ec2/home?region=${REGION}#InstanceDetails:instanceId=${instance_id}"
@@ -968,7 +979,7 @@ elif [[ $_ami_platform == windows ]]; then
         create_rdp_file "$_addr" "$_host_username" "$_rdp_file"
         open ~/Downloads
     else
-        echo -e "\033[31mFailed to establish connectivity with the target host on port 22.\033[0m"
+        echo -e "\033[31mFailed to establish connectivity with the target host on port 3389.\033[0m"
     fi        
 fi
 
