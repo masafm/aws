@@ -471,7 +471,7 @@ function generate_random_password {
 function create_windows_user_data {
     local dd_version=$1;shift
     local dd_agentuser_pass="$(generate_random_password)"
-    echo "DDAGENTUSER_PASSWORD is ${dd_agentuser_pass}"
+    echo "DDAGENTUSER_PASSWORD is ${dd_agentuser_pass}" >&2
     cat <<EOF
 <powershell>
 # Create Initial setup running.txt on desktop
