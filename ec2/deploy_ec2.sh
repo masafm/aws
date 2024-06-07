@@ -482,7 +482,7 @@ New-Item -Path \$filePath -ItemType File
 
 # Make shortcut on desktop for checking launch logs
 # Target directory for the shortcut
-\$targetPath = "C:\\ProgramData\\Amazon\\EC2Launch\\log"
+\$targetPath = "C:\\ProgramData\\Amazon"
 # Location to save the shortcut (user's desktop)
 \$desktopPath = [Environment]::GetFolderPath("Desktop")
 \$shortcutPath = Join-Path -Path \$desktopPath -ChildPath "Launch Logs.lnk"
@@ -499,7 +499,7 @@ EOF
         cat <<EOF
 # Install Datadog Agent
 Write-Host "Start installing Datadog Agent"
-${dd_version:+"\$version = \"$dd_version\""}
+${dd_version:+"\$version = '$dd_version'"}
 \$file = "datadog-agent-7-latest.amd64.msi"
 if (Test-Path \$file) {
     Remove-Item -Path \$file
