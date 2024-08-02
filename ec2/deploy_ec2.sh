@@ -924,8 +924,10 @@ if [[ $_ami_platform == windows ]]; then
     echo "PEM file for Windows password decryption: $secret_file"
     echo "You can skip waiting by ctrl-c"
     _host_password=$(get_windows_password $instance_id "$secret_file")
+    op item create --title "${_hostname} VM" --category login --vault Employee --tags "rdp,aws" --url "https://${REGION}.console.aws.amazon.com/ec2/home?region=${REGION}#InstanceDetails:instanceId=${instance_id}" username="${_host_username}" password="${_host_password}"
 fi
 set -e; trap - SIGINT # Ctrl-c will stop the script after this
+
 
 # Output the instance information
 echo "---------------------------------"
