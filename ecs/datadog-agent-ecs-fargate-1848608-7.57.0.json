@@ -1,12 +1,12 @@
 {
-  "family": "masafumi-kashiwagi-ecs-fargate",
+  "family": "masafumi-kashiwagi-ecs-fargate-7_57_0",
   "networkMode": "awsvpc",
   "executionRoleArn": "arn:aws:iam::{AWS_ACCOUNT_ID}:role/ecsTaskExecutionRole",
   "taskRoleArn": "arn:aws:iam::{AWS_ACCOUNT_ID}:role/ecsTaskExecutionRole",
   "containerDefinitions": [
       {
           "name": "datadog-agent",
-          "image": "public.ecr.aws/datadog/agent:7",
+          "image": "public.ecr.aws/datadog/agent:7.57.0",
           "essential": true,
           "environment": [
               {
