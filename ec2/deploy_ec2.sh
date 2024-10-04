@@ -758,6 +758,29 @@ function get_instance_name {
     fi
 }
 
+add_ssh_config() {
+    local host="$1";shift
+    local ip="$1";shift
+    local user="$1";shift
+    local url="$1";shift
+    local ssh_config_file="$HOME/.ssh/config"
+
+    if [ ! -f "$ssh_config_file" ]; then
+        touch "$ssh_config_file"
+    fi
+
+    if grep -q "^Host $host" "$ssh_config_file"; then
+        sed -i "/^Host $host$/,/^$/d" "$ssh_config_file"
+    fi
+
+    {
+        echo "Host $host"
+        echo "    HostName $ip"
+        echo "    User $user"
+        echo "    #URL $url"
+    } >> "$ssh_config_file"
+}
+
 # main function
 # All variables in uppercase are global variables, and variables starting with an underscore are local variables.
 #
@@ -958,9 +981,10 @@ if [[ $_ami_platform != windows ]]; then
     _addr=$(is_ssh_available "${_addr_array[@]}")
     trap - SIGINT; set -e
     if [[ -n $_addr ]];then
+        add_ssh_config "$_instance_name" "$_addr" "$_host_username" "https://${REGION}.console.aws.amazon.com/ec2/home?region=${REGION}#InstanceDetails:instanceId=${instance_id}"
         echo "SSH to $_addr is available now"
         _ssh_opts=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null)
-        _ssh_cmd=(ssh "${_ssh_opts[@]}" "${_host_username}@${_addr}")
+        _ssh_cmd=(ssh "${_ssh_opts[@]}" "${_instance_name}")
         _secret_file=$(get_secret_local_file "$_ssh_key_name")
         if [[ -n $_secret_file ]]; then
             _ssh_cmd+=(-i \"$_secret_file\")
