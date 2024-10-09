@@ -822,18 +822,8 @@ if ! command -v fzf &> /dev/null; then
 fi
 # Install op command if not installed
 if ! command -v op &> /dev/null; then
-    printf "op command (1Password CLI) is optional and not installed. Install it? [Y/n]: "
-    _response="yes"
-    read -r _response
-    case "$_response" in
-        [Yy]|[Yy][Ee][Ss])
-            echo "Installing 1Password CLI..."
-            brew update && brew install 1password-cli
-            ;;
-        *)
-            echo "Proceeding without 1Password CLI, you won't be able select keys from 1Password"
-            ;;
-    esac
+    echo "op command (1Password CLI) is optional and not installed. If you want to enable 1Password integration, please install it by"
+    echo "brew update && brew install 1password-cli"
 fi
 
 # Reading default env variables
