@@ -714,12 +714,14 @@ create_1password_entry() {
   local password="$1";shift
 
   # Use `op` command to create a new entry in 1Password
-  op item create \
-     --category Login \
-     --tags "rdp,aws" \
-     --title "$instance_name" \
-     username="$username" \
-     password="$password" >/dev/null
+  if command -v op &> /dev/null;then
+      op item create \
+         --category Login \
+         --tags "rdp,aws" \
+         --title "$instance_name" \
+         username="$username" \
+         password="$password" >/dev/null
+  fi
 }
 
 function is_ssh_available {
@@ -822,8 +824,8 @@ if ! command -v fzf &> /dev/null; then
 fi
 # Install op command if not installed
 if ! command -v op &> /dev/null; then
-    echo "op command (1Password CLI) is optional and not installed. If you want to enable 1Password integration, please install it by"
-    echo "brew update && brew install 1password-cli"
+    echo "1Password CLI is optional and not installed. If you want to enable 1Password integration, please install it by"
+    echo -e "    \033[33mbrew update && brew install 1password-cli\033[0m"
 fi
 
 # Reading default env variables
