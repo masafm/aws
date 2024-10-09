@@ -665,7 +665,7 @@ function get_secret_local_file {
 
 function _get_secret_1password {
     local ssh_key_name=$1;shift
-    local secret_file
+    local secret_file=""
     if command -v op &> /dev/null;then
         local secret_file=$(mktemp)
         local keys=("private key")
@@ -942,6 +942,15 @@ elif [[ $_ami_platform == windows ]]; then
     user_data=$(create_windows_user_data "$_dd_version")
 fi
 
+# Check for ssh private key
+if [[ $_ami_platform == windows ]]; then
+    _secret_file=$(get_secret_file_path "$_ssh_key_name");
+    if [[ -z $_secret_file ]];then
+        echo -e "\033[31mCan not find local PEM file or SSH key in 1Password.\033[0m"
+        exit 1
+    fi
+fi
+
 # Deploy Instance
 instance_id=$(deploy_ec2_instance "$_instance_name" "$_ssh_key_name" "$_sg_id")
 
@@ -949,10 +958,9 @@ instance_id=$(deploy_ec2_instance "$_instance_name" "$_ssh_key_name" "$_sg_id")
 set +e; trap 'echo -e "\nCtrl-C is pressed. Instance ${instance_id} already created.."' SIGINT
 # Wait for windows password generation, but can be skipped by ctrl-c.
 if [[ $_ami_platform == windows ]]; then
-    secret_file=$(get_secret_file_path "$_ssh_key_name");[[ -z $secret_file ]] && exit 1
-    echo "PEM file for Windows password decryption: $secret_file"
+    echo "PEM file for Windows password decryption: $_secret_file"
     echo "You can skip waiting by ctrl-c"
-    _host_password=$(get_windows_password $instance_id "$secret_file")
+    _host_password=$(get_windows_password $instance_id "$_secret_file")
     create_1password_entry "${_hostname} VM" "$_host_username" "${_host_password}"
 fi
 set -e; trap - SIGINT # Ctrl-c will stop the script after this
