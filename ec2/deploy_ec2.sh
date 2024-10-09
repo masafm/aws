@@ -708,6 +708,20 @@ function get_secret_file_path {
     echo $secret_file
 }
 
+create_1password_entry() {
+  local instance_name="$1";shift
+  local username="$1";shift
+  local password="$1";shift
+
+  # Use `op` command to create a new entry in 1Password
+  op item create \
+     --category Login \
+     --tags "rdp,aws" \
+     --title "$instance_name" \
+     username="$username" \
+     password="$password" >/dev/null
+}
+
 function is_ssh_available {
     is_tcp_port_available 22 "$@"
     local sleep_sec=15
@@ -947,7 +961,7 @@ if [[ $_ami_platform == windows ]]; then
     echo "PEM file for Windows password decryption: $secret_file"
     echo "You can skip waiting by ctrl-c"
     _host_password=$(get_windows_password $instance_id "$secret_file")
-    op item create --title "${_hostname} VM" --category login --vault Employee --tags "rdp,aws" username="${_host_username}" password="${_host_password}" >/dev/null
+    create_1password_entry "${_hostname} VM" "$_host_username" "${_host_password}"
 fi
 set -e; trap - SIGINT # Ctrl-c will stop the script after this
 
@@ -1006,7 +1020,7 @@ elif [[ $_ami_platform == windows ]]; then
         open ~/Downloads
     else
         echo -e "\033[31mFailed to establish connectivity with the target host on port 3389.\033[0m"
-    fi        
+    fi
 fi
 
 # Comment for avoiding unknown error
