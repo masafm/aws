@@ -1,0 +1,222 @@
+{
+  "family": "masafumi-kashiwagi-ecs-ec2-mamiko",
+  "networkMode": "awsvpc",
+  "executionRoleArn": "arn:aws:iam::{AWS_ACCOUNT_ID}:role/ecsTaskExecutionRole",
+  "taskRoleArn": "arn:aws:iam::{AWS_ACCOUNT_ID}:role/ecsTaskExecutionRole",
+  "containerDefinitions": [
+    {
+      "name": "datadog-agent",
+      "dockerLabels": {
+          "com.datadoghq.ad.checks": "{ \"jmx\": { \"init_config\": {}, \"instances\": [ { \"jmx_url\": \"service:jmx:rmi:///jndi/rmi://%%host%%:27081/jmxrmi\" } ] }, \"solr\": { \"init_config\": { \"is_jmx\": true, \"collect_default_metrics\": true }, \"instances\": [ { \"host\": \"%%host%%\", \"port\": \"27081\" } ] } }"
+      },
+      "image": "public.ecr.aws/datadog/agent:latest",
+      "cpu": 100,
+      "memory": 512,
+      "essential": true,
+      "mountPoints": [
+        {
+          "containerPath": "/var/run/docker.sock",
+          "sourceVolume": "docker_sock",
+          "readOnly": true
+        },
+        {
+          "containerPath": "/host/sys/fs/cgroup",
+          "sourceVolume": "cgroup",
+          "readOnly": true
+        },
+        {
+          "containerPath": "/host/proc",
+          "sourceVolume": "proc",
+          "readOnly": true
+        },
+        {
+          "sourceVolume": "runtimesocketdir",
+          "containerPath": "/host/var/run/datadog"
+        }
+      ],
+      "environment": [
+        {
+          "name": "DD_API_KEY",
+          "value": "{DD_API_KEY}"
+        },
+        {
+          "name": "DD_SITE",
+          "value": "datadoghq.com"
+        },
+        {
+          "name": "DD_APM_ENABLED",
+          "value": "true"
+        },
+        {
+          "name": "DD_APM_RECEIVER_SOCKET",
+          "value": "/host/var/run/datadog/apm.socket"
+        }
+      ],
+      "healthCheck": {
+	  "retries": 3,
+	  "command": ["CMD-SHELL","agent health"],
+	  "timeout": 5,
+	  "interval": 30,
+	  "startPeriod": 15
+      },
+      "logConfiguration": {
+          "logDriver": "awslogs",
+          "options": {
+              "awslogs-group": "masafumi-kashiwagi-agent",
+              "awslogs-region": "ap-northeast-1",
+              "awslogs-create-group": "true",
+              "awslogs-stream-prefix": "mk"
+          }
+      }
+    },
+    {
+        "name": "php-fpm",
+        "image": "public.ecr.aws/b1o7r7e0/masafumi.kashiwagi/php-fpm:20231220-1",
+        "cpu": 100,
+        "memory": 512,
+        "essential": true,
+        "environment": [
+            {
+                "name": "DD_ENV",
+                "value": "ecs"
+            },
+            {
+              "name": "DD_TRACE_AGENT_URL",
+              "value": "unix:///host/var/run/datadog/apm.socket"
+            },
+            {
+              "name": "DD_TRACE_DEBUG",
+              "value": "true"
+            },
+            {
+              "name": "CURL_TARGET_URL",
+              "value": "http://localhost:81/nginx_status"
+            }
+        ],
+        "mountPoints": [
+            {
+                "sourceVolume": "runtimesocketdir",
+                "containerPath": "/host/var/run/datadog"
+            }
+        ],
+        "logConfiguration": {
+                  "logDriver": "awslogs",
+                  "options": {
+                      "awslogs-group": "masafumi-kashiwagi-php-fpm",
+                      "awslogs-region": "ap-northeast-1",
+                      "awslogs-create-group": "true",
+                      "awslogs-stream-prefix": "mk"
+                  }
+              }
+          },
+    {
+        "name": "nginx",
+        "image": "public.ecr.aws/b1o7r7e0/masafumi.kashiwagi/nginx:20231220-3",
+        "cpu": 100,
+        "memory": 512,
+        "essential": true,
+        "environment": [
+            {
+                "name": "DD_ENV",
+                "value": "ecs"
+            },
+            {
+              "name": "DD_TRACE_AGENT_URL",
+              "value": "unix:///host/var/run/datadog/apm.socket"
+            },
+            {
+              "name": "DD_TRACE_DEBUG",
+              "value": "true"
+            },
+            {
+              "name": "PHP_FPM_ADDR",
+              "value": "localhost:9000"
+            }
+        ],
+        "mountPoints": [
+            {
+                "sourceVolume": "runtimesocketdir",
+                "containerPath": "/host/var/run/datadog"
+            }
+        ],
+	"logConfiguration": {
+          "logDriver": "awslogs",
+          "options": {
+              "awslogs-group": "masafumi-kashiwagi-nginx",
+              "awslogs-region": "ap-northeast-1",
+              "awslogs-create-group": "true",
+              "awslogs-stream-prefix": "mk"
+          }
+        }
+    },
+    {
+      "name": "apache-bench",
+      "image": "public.ecr.aws/b1o7r7e0/masafumi.kashiwagi/apache-bench:1",
+      "cpu": 100,
+      "memory": 512,
+      "essential": true,
+      "environment": [
+      ],
+      "logConfiguration": {
+          "logDriver": "awsfirelens",
+          "options": {
+            "Name": "datadog",
+            "apikey": "{DD_API_KEY}",
+            "Host": "http-intake.logs.datadoghq.com",
+            "dd_service": "apache-bench",
+            "dd_source": "apache-bench",
+            "dd_message_key": "log",
+            "dd_tags": "ecs:ec2",
+            "TLS": "on",
+            "provider": "ecs"
+          }
+      }
+    },
+    {
+      "name": "log_router",
+      "image": "amazon/aws-for-fluent-bit:stable",
+      "cpu": 100,
+      "memory": 512,
+      "essential": true,
+      "firelensConfiguration": {
+          "type": "fluentbit",
+          "options": { "enable-ecs-log-metadata": "true" }
+      },
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+            "awslogs-group": "masafumi-kashiwagi-log_router",
+            "awslogs-region": "ap-northeast-1",
+            "awslogs-create-group": "true",
+            "awslogs-stream-prefix": "mk"
+        }
+      }
+    }
+  ],
+  "volumes": [
+    {
+      "host": {
+        "sourcePath": "/var/run/docker.sock"
+      },
+      "name": "docker_sock"
+    },
+    {
+      "host": {
+        "sourcePath": "/proc/"
+      },
+      "name": "proc"
+    },
+    {
+      "host": {
+        "sourcePath": "/sys/fs/cgroup/"
+      },
+      "name": "cgroup"
+    },
+    {
+      "name": "runtimesocketdir",
+      "host": {
+          "sourcePath": "/var/run/datadog"
+    }
+    }
+  ]
+}
