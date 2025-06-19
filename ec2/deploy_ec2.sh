@@ -563,7 +563,7 @@ Start-Process explorer
 # Install Notepad++
 Write-Host "Start installing Notepad++"
 # URL for the Notepad++ installer
-\$installerUrl = "https://github.com/notepad-plus-plus/notepad-plus-plus/releases/download/v8.6.5/npp.8.6.5.Installer.x64.exe"
+\$installerUrl = "https://github.com/notepad-plus-plus/notepad-plus-plus/releases/download/v8.8.1/npp.8.8.1.Installer.x64.exe"
 # Local path for downloading the installer
 \$localPath = "\$env:TEMP\npp_installer.exe"
 # Download the installer
