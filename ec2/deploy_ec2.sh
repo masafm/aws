@@ -683,7 +683,7 @@ function _get_secret_1password {
             return 1
         fi
         for i in "${keys[@]}"; do
-            op item get "$item_title" --fields "${i}" --reveal | \
+            op item get "$item_title" --fields "${i}" --reveal 2>/dev/null | \
                 sed -e 's/"//g' \
                     -e 's/BEGIN PRIVATE KEY/BEGIN RSA PRIVATE KEY/' \
                     -e 's/END PRIVATE KEY/END RSA PRIVATE KEY/' \
