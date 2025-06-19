@@ -574,6 +574,17 @@ Start-Process -FilePath \$localPath -Args '/S' -NoNewWindow -Wait
 Remove-Item -Path \$localPath -Force
 Write-Host "Notepad++ has been installed successfully."
 
+# Chrome installer URL
+\$chromeInstallerUrl = "https://dl.google.com/chrome/install/latest/chrome_installer.exe"
+# Save to temporary folder
+\$installerPath = "\$env:TEMP\chrome_installer.exe"
+# Download Chrome
+Invoke-WebRequest -Uri \$chromeInstallerUrl -OutFile \$installerPath
+# Install silently
+Start-Process -FilePath \$installerPath -Args "/silent /install" -Wait
+# Delete the installer
+Remove-Item \$installerPath
+
 # Create Initial setup finished.txt on desktop
 \$desktopPath = [Environment]::GetFolderPath("Desktop")
 # Specify the full path for the new file
